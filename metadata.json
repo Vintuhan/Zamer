@@ -1,0 +1,6 @@
+{
+  "name": "Замерщик",
+  "description": "Офлайн-помощник для мастеров по отделке: замеры стен, пола, уголков, сметы и калькулятор с автосохранением",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
