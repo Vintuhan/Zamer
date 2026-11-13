@@ -24,6 +24,18 @@ interface ProjectDao {
     @Update
     suspend fun updateProject(project: ProjectEntity)
 
+    @Query("UPDATE projects SET hasStretchCeiling = :hasStretchCeiling, updatedAt = :updatedAt WHERE id = :projectId")
+    suspend fun updateProjectStretchCeiling(projectId: Long, hasStretchCeiling: Boolean, updatedAt: Long)
+
+    @Query("UPDATE projects SET wallHeightMeters = :wallHeightMeters, updatedAt = :updatedAt WHERE id = :projectId")
+    suspend fun updateProjectWallHeight(projectId: Long, wallHeightMeters: Double, updatedAt: Long)
+
+    @Query("UPDATE projects SET projectOpeningsJson = :json, updatedAt = :updatedAt WHERE id = :projectId")
+    suspend fun updateProjectOpeningsJson(projectId: Long, json: String, updatedAt: Long)
+
+    @Query("UPDATE projects SET notesText = :notes, updatedAt = :updatedAt WHERE id = :projectId")
+    suspend fun updateProjectNotes(projectId: Long, notes: String, updatedAt: Long)
+
     @Query("DELETE FROM projects WHERE id = :projectId")
     suspend fun deleteProjectById(projectId: Long)
 }
@@ -47,6 +59,66 @@ interface RoomDao {
 
     @Update
     suspend fun updateRoom(room: RoomEntity)
+
+    @Query("UPDATE rooms SET wallsJson = :wallsJson WHERE id = :roomId")
+    suspend fun updateWallsJson(roomId: Long, wallsJson: String)
+
+    @Query("UPDATE rooms SET openingsJson = :openingsJson WHERE id = :roomId")
+    suspend fun updateOpeningsJson(roomId: Long, openingsJson: String)
+
+    @Query(
+        """
+        UPDATE rooms SET
+            heightOverrideMeters = :heightOverride,
+            hasStretchCeiling = :hasStretchCeiling,
+            heightBeforeCeilingMeters = :heightBefore,
+            heightAfterCeilingMeters = :heightAfter
+        WHERE id = :roomId
+        """
+    )
+    suspend fun updateCeilingAndHeight(
+        roomId: Long,
+        heightOverride: Double,
+        hasStretchCeiling: Boolean,
+        heightBefore: Double?,
+        heightAfter: Double?
+    )
+
+    @Query("UPDATE rooms SET hasStretchCeiling = :hasStretchCeiling WHERE projectId = :projectId")
+    suspend fun updateRoomsStretchCeilingForProject(projectId: Long, hasStretchCeiling: Boolean)
+
+    @Query(
+        """
+        UPDATE rooms SET
+            heightOverrideMeters = :heightOverride,
+            hasStretchCeiling = :hasStretchCeiling,
+            heightBeforeCeilingMeters = :heightBefore,
+            heightAfterCeilingMeters = :heightAfter
+        WHERE projectId = :projectId
+        """
+    )
+    suspend fun applyCeilingAndHeightToAllRooms(
+        projectId: Long,
+        heightOverride: Double,
+        hasStretchCeiling: Boolean,
+        heightBefore: Double?,
+        heightAfter: Double?
+    )
+
+    @Query("UPDATE rooms SET heightOverrideMeters = :heightMeters, heightBeforeCeilingMeters = :heightMeters, heightAfterCeilingMeters = :heightMeters WHERE projectId = :projectId")
+    suspend fun updateAllRoomHeights(projectId: Long, heightMeters: Double)
+
+    @Query("UPDATE rooms SET floorAreaOverrideMeters = :floorOverride WHERE id = :roomId")
+    suspend fun updateFloorOverride(roomId: Long, floorOverride: Double?)
+
+    @Query("UPDATE rooms SET name = :name WHERE id = :roomId")
+    suspend fun updateRoomName(roomId: Long, name: String)
+
+    @Query("SELECT * FROM rooms WHERE projectId = :projectId ORDER BY sortOrder ASC, id ASC")
+    suspend fun getRoomsForProjectSync(projectId: Long): List<RoomEntity>
+
+    @Query("DELETE FROM rooms WHERE projectId = :projectId")
+    suspend fun deleteRoomsForProject(projectId: Long)
 
     @Query("DELETE FROM rooms WHERE id = :roomId")
     suspend fun deleteRoomById(roomId: Long)
@@ -104,4 +176,34 @@ interface CalculatorStateDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertState(state: CalculatorStateEntity)
+}
+
+@Dao
+interface MaterialExpenseDao {
+    @Query("SELECT * FROM material_expenses WHERE projectId = :projectId ORDER BY createdAt DESC, id DESC")
+    fun observeForProject(projectId: Long): Flow<List<MaterialExpenseEntity>>
+
+    @Query("SELECT * FROM material_expenses ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<MaterialExpenseEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(item: MaterialExpenseEntity): Long
+
+    @Query("DELETE FROM material_expenses WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+@Dao
+interface MoneyEntryDao {
+    @Query("SELECT * FROM money_entries WHERE projectId = :projectId ORDER BY createdAt DESC, id DESC")
+    fun observeForProject(projectId: Long): Flow<List<MoneyEntryEntity>>
+
+    @Query("SELECT * FROM money_entries ORDER BY createdAt DESC, id DESC")
+    fun observeAll(): Flow<List<MoneyEntryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entry: MoneyEntryEntity): Long
+
+    @Query("DELETE FROM money_entries WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }

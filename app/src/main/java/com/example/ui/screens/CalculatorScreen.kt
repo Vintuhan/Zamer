@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -58,15 +58,19 @@ import com.example.ui.theme.DeepGreenSoft
 import com.example.ui.theme.MutedGray
 import com.example.ui.theme.PureBlack
 import com.example.ui.theme.PureWhite
+import com.example.ui.theme.WarningRed
 import com.example.ui.viewmodel.CalculatorUiState
+import com.example.ui.viewmodel.ZamerViewModel
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CalculatorScreen(
     aggregate: ProjectAggregate?,
+    globalHistory: List<HistoryEntryEntity> = emptyList(),
     calcUi: CalculatorUiState,
     onBackClick: () -> Unit,
     onDigit: (Long, String) -> Unit,
+    onParen: (Long, String) -> Unit,
     onBackspace: (Long) -> Unit,
     onClear: (Long) -> Unit,
     onPercent: (Long) -> Unit,
@@ -74,17 +78,17 @@ fun CalculatorScreen(
     onEquals: (Long) -> Unit,
     onInsertMeasurement: (Long, String, Double, String) -> Unit,
     onRestoreRecent: (Long, HistoryEntryEntity) -> Unit,
+    onClearHistory: (Long) -> Unit,
     onFlushToHistory: (Long) -> Unit
 ) {
-    if (aggregate == null) return
-    val projectId = aggregate.project.id
-    val totals = aggregate.totals
+    val projectId = aggregate?.project?.id ?: ZamerViewModel.GLOBAL_CALC_PROJECT_ID
+    val historyEntries = aggregate?.history ?: globalHistory
 
     var showMeasurementsDialog by remember { mutableStateOf(false) }
+    var showHistoryDialog by remember { mutableStateOf(false) }
 
-    // Most recent calculation entry for the small gray top line
-    val recentCalc = remember(aggregate.history) {
-        aggregate.history.firstOrNull { it.source == "CALC" && it.resultValue != null }
+    val recentCalc = remember(historyEntries) {
+        historyEntries.firstOrNull { it.source == "CALC" && it.resultValue != null }
     }
 
     DisposableEffect(projectId) {
@@ -116,7 +120,7 @@ fun CalculatorScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Top bar: Back on left + centered "Замеры" button
+            // Top bar: Back | History | optional Замеры (when inside project)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -135,33 +139,50 @@ fun CalculatorScreen(
                         containerColor = PureWhite,
                         contentColor = PureBlack
                     ),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад", modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(4.dp))
                     Text("Назад", style = MaterialTheme.typography.labelLarge)
                 }
 
-                // Single centered "Замеры" button
                 OutlinedButton(
-                    onClick = { showMeasurementsDialog = true },
+                    onClick = { showHistoryDialog = true },
                     modifier = Modifier
                         .heightIn(min = 50.dp)
-                        .testTag("calc_measurements_button"),
+                        .testTag("calc_history_button"),
                     shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(2.dp, DeepGreen),
+                    border = BorderStroke(2.dp, PureBlack),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = DeepGreen,
-                        contentColor = PureWhite
+                        containerColor = DeepGreenSoft,
+                        contentColor = PureBlack
                     ),
-                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 8.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    Icon(Icons.Filled.Straighten, contentDescription = null, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Замеры", style = MaterialTheme.typography.labelLarge)
+                    Icon(Icons.Filled.History, contentDescription = "История", tint = DeepGreen, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("История", style = MaterialTheme.typography.labelLarge)
                 }
 
-                Spacer(Modifier.width(48.dp))
+                if (aggregate != null) {
+                    OutlinedButton(
+                        onClick = { showMeasurementsDialog = true },
+                        modifier = Modifier
+                            .heightIn(min = 50.dp)
+                            .testTag("calc_measurements_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(2.dp, DeepGreen),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = DeepGreen,
+                            contentColor = PureWhite
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Filled.Straighten, contentDescription = "Замеры", modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Замеры", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
             }
 
             // Classic Display with small gray recent calculation (double-tap to restore!)
@@ -226,13 +247,13 @@ fun CalculatorScreen(
                 }
             }
 
-            // Non-scrolling classic 5-row keypad filling remaining space cleanly
-            val rows = listOf(
-                listOf("C", "⌫", "%", "÷"),
-                listOf("7", "8", "9", "×"),
-                listOf("4", "5", "6", "−"),
-                listOf("1", "2", "3", "+"),
-                listOf("00", "0", ".", "=")
+            // Keypad with brackets ( and )
+            val topRows = listOf(
+                listOf("(", ")", "C", "⌫"),
+                listOf("7", "8", "9", "÷"),
+                listOf("4", "5", "6", "×"),
+                listOf("1", "2", "3", "−"),
+                listOf("0", ".", "%", "+")
             )
 
             Column(
@@ -242,7 +263,7 @@ fun CalculatorScreen(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                rows.forEach { rowKeys ->
+                topRows.forEach { rowKeys ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -252,14 +273,14 @@ fun CalculatorScreen(
                         rowKeys.forEach { key ->
                             ClassicCalcKey(
                                 label = key,
-                                isOperator = key in listOf("C", "⌫", "%", "÷", "×", "−", "+"),
-                                isEquals = key == "=",
+                                isOperator = key in listOf("(", ")", "C", "⌫", "%", "÷", "×", "−", "+"),
+                                isEquals = false,
                                 onClick = {
                                     when (key) {
+                                        "(", ")" -> onParen(projectId, key)
                                         "C" -> onClear(projectId)
                                         "⌫" -> onBackspace(projectId)
                                         "%" -> onPercent(projectId)
-                                        "=" -> onEquals(projectId)
                                         "÷", "×", "−", "+" -> onOperator(projectId, key)
                                         else -> onDigit(projectId, key)
                                     }
@@ -271,12 +292,90 @@ fun CalculatorScreen(
                         }
                     }
                 }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ClassicCalcKey(
+                        label = "00",
+                        isOperator = false,
+                        isEquals = false,
+                        onClick = { onDigit(projectId, "00") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                    )
+                    ClassicCalcKey(
+                        label = "=",
+                        isOperator = false,
+                        isEquals = true,
+                        onClick = { onEquals(projectId) },
+                        modifier = Modifier
+                            .weight(3f)
+                            .fillMaxSize()
+                    )
+                }
             }
         }
     }
 
-    // Concise Measurements Picker Dialog (tap any number to insert into calculator with unit!)
-    if (showMeasurementsDialog) {
+    if (showHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showHistoryDialog = false },
+            containerColor = PureWhite,
+            title = { Text("История вычислений", style = MaterialTheme.typography.titleLarge, color = PureBlack) },
+            text = {
+                if (historyEntries.isEmpty()) {
+                    Text("История пока пуста", style = MaterialTheme.typography.bodyLarge, color = MutedGray)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 380.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(historyEntries, key = { it.id }) { entry ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = DeepGreenSoft,
+                                border = BorderStroke(1.dp, DeepGreen),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onRestoreRecent(projectId, entry)
+                                        showHistoryDialog = false
+                                    }
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(entry.expression, style = MaterialTheme.typography.bodyLarge, color = PureBlack)
+                                    Text(
+                                        text = "${entry.title} · ${Formatters.formatDateTime(entry.timestamp)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MutedGray
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHistoryDialog = false }) {
+                    Text("Закрыть", color = DeepGreen)
+                }
+            },
+            dismissButton = {
+                if (historyEntries.isNotEmpty()) {
+                    TextButton(onClick = { onClearHistory(projectId) }) {
+                        Text("Очистить", color = WarningRed)
+                    }
+                }
+            }
+        )
+    }
+
+    if (showMeasurementsDialog && aggregate != null) {
+        val totals = aggregate.totals
         AlertDialog(
             onDismissRequest = { showMeasurementsDialog = false },
             containerColor = PureWhite,
@@ -306,10 +405,10 @@ fun CalculatorScreen(
                                 }
                             )
                             MeasureInsertRow(
-                                label = "Стены (с окнами)",
+                                label = "Стены (без вычета)",
                                 valueStr = Formatters.formatArea(totals.totalGrossWallAreaSqm),
                                 onClick = {
-                                    onInsertMeasurement(projectId, "Стены (без вычета)", totals.totalGrossWallAreaSqm, "м²")
+                                    onInsertMeasurement(projectId, "Стены полн.", totals.totalGrossWallAreaSqm, "м²")
                                     showMeasurementsDialog = false
                                 }
                             )
@@ -318,14 +417,6 @@ fun CalculatorScreen(
                                 valueStr = Formatters.formatArea(totals.totalInnerFloorAreaSqm),
                                 onClick = {
                                     onInsertMeasurement(projectId, "Пол", totals.totalInnerFloorAreaSqm, "м²")
-                                    showMeasurementsDialog = false
-                                }
-                            )
-                            MeasureInsertRow(
-                                label = "Уголки",
-                                valueStr = Formatters.formatRunningMeters(totals.totalCornersMeters),
-                                onClick = {
-                                    onInsertMeasurement(projectId, "Уголки", totals.totalCornersMeters, "п.м.")
                                     showMeasurementsDialog = false
                                 }
                             )
@@ -343,18 +434,10 @@ fun CalculatorScreen(
                         ) {
                             Text(room.entity.name, style = MaterialTheme.typography.titleMedium, color = PureBlack)
                             MeasureInsertRow(
-                                label = "Стены (чистая)",
+                                label = "Стены",
                                 valueStr = Formatters.formatArea(c.netWallAreaSqm),
                                 onClick = {
                                     onInsertMeasurement(projectId, "${room.entity.name} стены", c.netWallAreaSqm, "м²")
-                                    showMeasurementsDialog = false
-                                }
-                            )
-                            MeasureInsertRow(
-                                label = "Стены (без вычета окон)",
-                                valueStr = Formatters.formatArea(c.grossWallAreaSqm),
-                                onClick = {
-                                    onInsertMeasurement(projectId, "${room.entity.name} стены полн.", c.grossWallAreaSqm, "м²")
                                     showMeasurementsDialog = false
                                 }
                             )
@@ -363,14 +446,6 @@ fun CalculatorScreen(
                                 valueStr = Formatters.formatArea(c.innerFloorAreaSqm),
                                 onClick = {
                                     onInsertMeasurement(projectId, "${room.entity.name} пол", c.innerFloorAreaSqm, "м²")
-                                    showMeasurementsDialog = false
-                                }
-                            )
-                            MeasureInsertRow(
-                                label = "Уголки",
-                                valueStr = Formatters.formatRunningMeters(c.totalCornersMeters),
-                                onClick = {
-                                    onInsertMeasurement(projectId, "${room.entity.name} углы", c.totalCornersMeters, "п.м.")
                                     showMeasurementsDialog = false
                                 }
                             )

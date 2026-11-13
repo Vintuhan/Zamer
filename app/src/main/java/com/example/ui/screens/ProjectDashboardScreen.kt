@@ -22,11 +22,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Calculate
-import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.GridOn
-import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.DashboardCustomize
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.ReceiptLong
-import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.ViewQuilt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -56,7 +58,10 @@ fun ProjectDashboardScreen(
     onOpenMinorWorks: () -> Unit,
     onOpenEstimate: () -> Unit,
     onOpenCalculator: () -> Unit,
-    onOpenHistory: () -> Unit
+    onOpenMaterials: () -> Unit,
+    onOpenNotes: () -> Unit,
+    onOpenMoneyHistory: () -> Unit,
+    onEditDrawing: () -> Unit
 ) {
     if (aggregate == null) {
         Scaffold(
@@ -72,16 +77,15 @@ fun ProjectDashboardScreen(
 
     val p = aggregate.project
     val t = aggregate.totals
+    val materialsTotal = aggregate.materialExpenses.sumOf { it.priceRub }
+    val moneyTotal = aggregate.moneyEntries.sumOf { it.amountRub }
 
     Scaffold(
         containerColor = PureWhite,
         topBar = {
             ZamerTopBar(
                 title = p.name,
-                subtitle = buildString {
-                    if (p.address.isNotBlank()) append("${p.address} · ")
-                    append("${p.layoutTitle} · ${aggregate.rooms.size} комн.")
-                },
+                subtitle = "Комнат: ${aggregate.rooms.size}",
                 onBackClick = onBackClick
             )
         }
@@ -103,7 +107,7 @@ fun ProjectDashboardScreen(
                     DashboardBigButton(
                         title = "Площадь стен",
                         valueText = Formatters.formatArea(t.totalWallAreaSqm),
-                        icon = Icons.Filled.ContentPaste,
+                        icon = Icons.Filled.ViewQuilt,
                         isPrimary = true,
                         onClick = { onOpenCategory(MeasurementCategory.WALLS) },
                         testTag = "btn_wall_area"
@@ -113,7 +117,8 @@ fun ProjectDashboardScreen(
                     DashboardBigButton(
                         title = "Площадь пола",
                         valueText = Formatters.formatArea(t.totalInnerFloorAreaSqm),
-                        icon = Icons.Filled.GridOn,
+                        secondaryText = "со стенами: ${Formatters.formatArea(t.totalOuterFloorAreaSqm)}",
+                        icon = Icons.Filled.Layers,
                         isPrimary = true,
                         onClick = { onOpenCategory(MeasurementCategory.FLOOR) },
                         testTag = "btn_floor_area"
@@ -121,27 +126,7 @@ fun ProjectDashboardScreen(
                 }
                 item {
                     DashboardBigButton(
-                        title = "Длина уголков",
-                        valueText = Formatters.formatRunningMeters(t.totalCornersMeters),
-                        icon = Icons.Filled.Straighten,
-                        isPrimary = true,
-                        onClick = { onOpenCategory(MeasurementCategory.CORNERS) },
-                        testTag = "btn_corners_length"
-                    )
-                }
-                item {
-                    DashboardBigButton(
-                        title = "Мелкая работа",
-                        valueText = "${aggregate.minorWorks.size} поз. · ${Formatters.formatMoney(t.minorWorksTotalRub)}",
-                        icon = Icons.Filled.Build,
-                        isPrimary = false,
-                        onClick = onOpenMinorWorks,
-                        testTag = "btn_minor_works"
-                    )
-                }
-                item {
-                    DashboardBigButton(
-                        title = "Смета (итого)",
+                        title = "Смета",
                         valueText = Formatters.formatMoney(t.grandTotalRub),
                         icon = Icons.Filled.ReceiptLong,
                         isPrimary = false,
@@ -152,7 +137,7 @@ fun ProjectDashboardScreen(
                 item {
                     DashboardBigButton(
                         title = "Калькулятор",
-                        valueText = "Для отделки + автоистория",
+                        valueText = "Для расчётов и замеров",
                         icon = Icons.Filled.Calculate,
                         isPrimary = false,
                         onClick = onOpenCalculator,
@@ -161,12 +146,64 @@ fun ProjectDashboardScreen(
                 }
                 item {
                     DashboardBigButton(
-                        title = "История",
-                        valueText = "Записей: ${aggregate.history.size}",
-                        icon = Icons.Filled.History,
+                        title = "Материальные затраты",
+                        valueText = if (aggregate.materialExpenses.isEmpty()) {
+                            "Записей пока нет"
+                        } else {
+                            "${aggregate.materialExpenses.size} поз. · ${Formatters.formatMoney(materialsTotal)}"
+                        },
+                        icon = Icons.Filled.ShoppingCart,
                         isPrimary = false,
-                        onClick = onOpenHistory,
-                        testTag = "btn_history"
+                        onClick = onOpenMaterials,
+                        testTag = "btn_materials"
+                    )
+                }
+                item {
+                    DashboardBigButton(
+                        title = "Заметки",
+                        valueText = if (p.notesText.isBlank()) {
+                            "Пусто · текст и голос"
+                        } else {
+                            p.notesText.replace('\n', ' ').take(48)
+                        },
+                        icon = Icons.Filled.EditNote,
+                        isPrimary = false,
+                        onClick = onOpenNotes,
+                        testTag = "btn_notes"
+                    )
+                }
+                item {
+                    DashboardBigButton(
+                        title = "История денег",
+                        valueText = if (aggregate.moneyEntries.isEmpty()) {
+                            "Получено: 0 ₽"
+                        } else {
+                            "Получено: ${Formatters.formatMoney(moneyTotal)} (${aggregate.moneyEntries.size})"
+                        },
+                        icon = Icons.Filled.Payments,
+                        isPrimary = false,
+                        onClick = onOpenMoneyHistory,
+                        testTag = "btn_money_history"
+                    )
+                }
+                item {
+                    DashboardBigButton(
+                        title = "Изменить чертёж",
+                        valueText = "Собрать или поправить планировку",
+                        icon = Icons.Filled.DashboardCustomize,
+                        isPrimary = false,
+                        onClick = onEditDrawing,
+                        testTag = "btn_edit_drawing"
+                    )
+                }
+                item {
+                    DashboardBigButton(
+                        title = "Мелкая работа",
+                        valueText = "${aggregate.minorWorks.size} поз. · ${Formatters.formatMoney(t.minorWorksTotalRub)}",
+                        icon = Icons.Filled.Build,
+                        isPrimary = false,
+                        onClick = onOpenMinorWorks,
+                        testTag = "btn_minor_works"
                     )
                 }
                 item { Spacer(Modifier.height(12.dp)) }
@@ -182,12 +219,13 @@ private fun DashboardBigButton(
     icon: ImageVector,
     isPrimary: Boolean,
     onClick: () -> Unit,
-    testTag: String
+    testTag: String,
+    secondaryText: String? = null
 ) {
     val bg = if (isPrimary) DeepGreen else PureWhite
     val fg = if (isPrimary) PureWhite else PureBlack
     val badgeBg = if (isPrimary) PureWhite else DeepGreenSoft
-    val badgeFg = if (isPrimary) DeepGreen else DeepGreen
+    val badgeFg = DeepGreen
 
     Surface(
         modifier = Modifier
@@ -202,7 +240,7 @@ private fun DashboardBigButton(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 18.dp),
+                .padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -218,7 +256,7 @@ private fun DashboardBigButton(
                 ) {
                     Icon(
                         imageVector = icon,
-                        contentDescription = null,
+                        contentDescription = title,
                         tint = badgeFg,
                         modifier = Modifier.size(30.dp)
                     )
@@ -236,6 +274,13 @@ private fun DashboardBigButton(
                         style = MaterialTheme.typography.bodyLarge,
                         color = if (isPrimary) PureWhite else DeepGreen
                     )
+                    if (!secondaryText.isNullOrBlank()) {
+                        Text(
+                            text = secondaryText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isPrimary) PureWhite.copy(alpha = 0.78f) else DeepGreen.copy(alpha = 0.75f)
+                        )
+                    }
                 }
             }
         }

@@ -7,7 +7,6 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,14 +21,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.ButtonDefaults
@@ -65,14 +62,12 @@ import com.example.ui.theme.DeepGreen
 import com.example.ui.theme.DeepGreenSoft
 import com.example.ui.theme.PureBlack
 import com.example.ui.theme.PureWhite
-import com.example.ui.viewmodel.AiWorkSuggestion
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MinorWorksScreen(
     aggregate: ProjectAggregate?,
-    aiSuggestions: List<AiWorkSuggestion>,
     onBackClick: () -> Unit,
     onSaveWork: (MinorWorkEntity) -> Unit,
     onDeleteWork: (MinorWorkEntity) -> Unit
@@ -82,7 +77,6 @@ fun MinorWorksScreen(
     var editingId by remember { mutableStateOf(0L) }
     var commentInput by remember { mutableStateOf("") }
     var priceInput by remember { mutableStateOf("") }
-    var showAiPanel by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -138,32 +132,11 @@ fun MinorWorksScreen(
                         modifier = Modifier.widthIn(max = 600.dp),
                         borderColor = DeepGreen
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (editingId == 0L) "Добавить работу" else "Изменить работу",
-                                style = MaterialTheme.typography.titleLarge,
-                                color = DeepGreen
-                            )
-                            OutlinedButton(
-                                onClick = { showAiPanel = !showAiPanel },
-                                border = BorderStroke(2.dp, DeepGreen),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = if (showAiPanel) DeepGreen else PureWhite,
-                                    contentColor = if (showAiPanel) PureWhite else DeepGreen
-                                ),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                modifier = Modifier.testTag("ai_work_helper_button")
-                            ) {
-                                Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("ИИ-подсказки", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
+                        Text(
+                            text = if (editingId == 0L) "Добавить работу" else "Изменить работу",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = DeepGreen
+                        )
 
                         Spacer(Modifier.height(10.dp))
 
@@ -185,53 +158,6 @@ fun MinorWorksScreen(
                                         color = PureBlack,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                     )
-                                }
-                            }
-                        }
-
-                        if (showAiPanel) {
-                            Spacer(Modifier.height(12.dp))
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(DeepGreenSoft, RoundedCornerShape(14.dp))
-                                    .padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "ИИ-помощник по вашему объекту:",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = DeepGreen
-                                )
-                                aiSuggestions.forEach { sug ->
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = PureWhite,
-                                        border = BorderStroke(1.5.dp, DeepGreen),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                commentInput = sug.title
-                                                priceInput = Formatters.formatCleanNumber(sug.suggestedPrice)
-                                                showAiPanel = false
-                                            }
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(10.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(sug.title, style = MaterialTheme.typography.bodyLarge, color = PureBlack)
-                                                Text(sug.reason, style = MaterialTheme.typography.bodyMedium, color = DeepGreen)
-                                            }
-                                            Text(
-                                                text = Formatters.formatMoney(sug.suggestedPrice),
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = DeepGreen
-                                            )
-                                        }
-                                    }
                                 }
                             }
                         }

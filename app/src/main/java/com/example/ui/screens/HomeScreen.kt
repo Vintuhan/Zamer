@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Architecture
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material3.AlertDialog
@@ -52,6 +54,7 @@ import com.example.ui.components.AnimatedScreenEntrance
 import com.example.ui.components.ZamerCard
 import com.example.ui.components.ZamerPrimaryButton
 import com.example.ui.components.ZamerTopBar
+import com.example.ui.theme.BrightDoorGreen
 import com.example.ui.theme.DeepGreen
 import com.example.ui.theme.DeepGreenSoft
 import com.example.ui.theme.PureBlack
@@ -63,7 +66,9 @@ fun HomeScreen(
     projects: List<ProjectSummaryItem>,
     onAddProjectClick: () -> Unit,
     onOpenProjectClick: (Long) -> Unit,
-    onDeleteProjectClick: (Long) -> Unit
+    onDeleteProjectClick: (Long) -> Unit,
+    onOpenCalculatorClick: () -> Unit,
+    onOpenStatsClick: () -> Unit
 ) {
     var pendingDelete by remember { mutableStateOf<ProjectSummaryItem?>(null) }
     var deleteConfirmStep by remember { mutableIntStateOf(1) }
@@ -85,13 +90,78 @@ fun HomeScreen(
                 color = PureWhite,
                 border = BorderStroke(1.dp, PureBlack)
             ) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 600.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenCalculatorClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 54.dp)
+                                .testTag("home_calculator_button"),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(2.dp, PureBlack),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = DeepGreenSoft,
+                                contentColor = PureBlack
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Calculate,
+                                contentDescription = "Калькулятор",
+                                tint = DeepGreen,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Калькулятор",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onOpenStatsClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 54.dp)
+                                .testTag("home_stats_button"),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(2.dp, PureBlack),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = PureWhite,
+                                contentColor = PureBlack
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.BarChart,
+                                contentDescription = "Статистика",
+                                tint = DeepGreen,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Статистика",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
                     ZamerPrimaryButton(
                         text = "Добавить объект",
                         icon = Icons.Filled.Add,
@@ -164,7 +234,7 @@ fun HomeScreen(
                                 .widthIn(max = 600.dp)
                                 .testTag("project_card_${item.project.id}")
                                 .clickable { onOpenProjectClick(item.project.id) },
-                            borderColor = PureBlack
+                            borderColor = if (item.allWallsMeasured) BrightDoorGreen else PureBlack
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -274,7 +344,6 @@ fun HomeScreen(
         }
     }
 
-    // Triple confirmation dialog with swapped Yes / No positions on every step
     pendingDelete?.let { target ->
         val titleText = when (deleteConfirmStep) {
             1 -> "Удалить объект? (Шаг 1 из 3)"
@@ -340,7 +409,6 @@ fun HomeScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Swap Yes/No positions on step 2 vs step 1 & 3
                         if (deleteConfirmStep == 2) {
                             yesButton(Modifier.weight(1f))
                             noButton(Modifier.weight(1f))

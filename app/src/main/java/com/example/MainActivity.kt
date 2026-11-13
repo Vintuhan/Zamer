@@ -13,6 +13,7 @@ import com.example.ui.theme.ZamerTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureAppCheck(this, intent)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(
                 scrim = PureWhite.toArgb(),

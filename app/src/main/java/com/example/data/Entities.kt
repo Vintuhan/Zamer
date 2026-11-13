@@ -21,6 +21,9 @@ data class ProjectEntity(
     val useOuterFloorInEstimate: Boolean = false,
     val customDrawingJson: String = "[]",
     val estimateCategoriesJson: String = "",
+    val hasStretchCeiling: Boolean = false,
+    val projectOpeningsJson: String = "[]",
+    val notesText: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -43,6 +46,7 @@ data class RoomEntity(
     val name: String,
     val sortOrder: Int = 0,
     val wallCount: Int = 4,
+    val shapeKey: String = "AUTO",
     val wallsJson: String = "[]",
     val heightOverrideMeters: Double? = null,
     val hasStretchCeiling: Boolean = false,
@@ -141,4 +145,47 @@ data class CalculatorStateEntity(
     val resultPreview: Double = 0.0,
     val activeUnit: String = "",
     val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "material_expenses",
+    foreignKeys = [
+        ForeignKey(
+            entity = ProjectEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["projectId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("projectId"), Index("createdAt")]
+)
+data class MaterialExpenseEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val projectId: Long,
+    val itemName: String,
+    val priceRub: Double,
+    val purchaseDate: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "money_entries",
+    foreignKeys = [
+        ForeignKey(
+            entity = ProjectEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["projectId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("projectId"), Index("createdAt")]
+)
+data class MoneyEntryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val projectId: Long,
+    val amountRub: Double,
+    val paymentMethod: String, // "CASH" or "CARD"
+    val dateStr: String,
+    val reasonText: String,
+    val createdAt: Long = System.currentTimeMillis()
 )

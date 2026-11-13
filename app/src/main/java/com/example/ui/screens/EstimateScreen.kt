@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -56,6 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,8 +78,8 @@ import com.example.ui.components.AnimatedScreenEntrance
 import com.example.ui.components.ZamerCard
 import com.example.ui.components.ZamerInputField
 import com.example.ui.components.ZamerPrimaryButton
-import com.example.ui.components.ZamerSecondaryButton
 import com.example.ui.components.ZamerTopBar
+import com.example.ui.theme.BrightDoorGreen
 import com.example.ui.theme.DeepGreen
 import com.example.ui.theme.DeepGreenSoft
 import com.example.ui.theme.PureBlack
@@ -110,6 +112,10 @@ fun EstimateScreen(
     var useOuterFloor by remember(p.id, p.useOuterFloorInEstimate) {
         mutableStateOf(p.useOuterFloorInEstimate)
     }
+    var selectedIndex by remember(p.id) { mutableIntStateOf(0) }
+    if (selectedIndex > categories.lastIndex && categories.isNotEmpty()) {
+        selectedIndex = 0
+    }
 
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var viewingSavedEstimate by remember { mutableStateOf<SavedEstimateEntity?>(null) }
@@ -117,6 +123,7 @@ fun EstimateScreen(
     val floorArea = if (useOuterFloor) t.totalOuterFloorAreaSqm else t.totalInnerFloorAreaSqm
 
     fun qtyFor(cat: EstimateCategoryConfig): Double {
+        if (cat.usePartial) return cat.partialQuantity.coerceAtLeast(0.0)
         return when (cat.sourceKind) {
             "WALLS" -> t.totalWallAreaSqm
             "FLOOR" -> floorArea
@@ -126,7 +133,7 @@ fun EstimateScreen(
     }
 
     val liveGrandTotal = categories
-        .filter { it.isSelected && it.pricePerUnit > 0.0 }
+        .filter { it.pricePerUnit > 0.0 }
         .sumOf { qtyFor(it) * it.pricePerUnit } + t.minorWorksTotalRub
 
     fun persist() {
@@ -140,34 +147,9 @@ fun EstimateScreen(
             ZamerTopBar(
                 title = "Смета",
                 subtitle = p.name,
-                onBackClick = onBackClick
-            )
-        },
-        bottomBar = {
-            Surface(color = PureWhite, border = BorderStroke(1.dp, PureBlack)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ZamerPrimaryButton(
-                        text = "Сохранить смету",
-                        icon = Icons.Filled.Save,
-                        onClick = {
-                            onSaveEstimateInsideApp(aggregate)
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Смета сохранена в приложении")
-                            }
-                        },
-                        modifier = Modifier.widthIn(max = 600.dp),
-                        testTag = "save_estimate_button"
-                    )
-                    ZamerSecondaryButton(
-                        text = "Печать / PDF (1 лист)",
-                        icon = Icons.Filled.PictureAsPdf,
+                onBackClick = onBackClick,
+                trailing = {
+                    OutlinedButton(
                         onClick = {
                             printSinglePagePdf(
                                 context = context,
@@ -177,8 +159,44 @@ fun EstimateScreen(
                                 grandTotal = liveGrandTotal
                             )
                         },
+                        modifier = Modifier
+                            .heightIn(min = 50.dp)
+                            .testTag("print_pdf_estimate_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(2.dp, DeepGreen),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = DeepGreenSoft,
+                            contentColor = DeepGreen
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Filled.PictureAsPdf, contentDescription = "В PDF", modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("В PDF", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            )
+        },
+        bottomBar = {
+            Surface(color = PureWhite, border = BorderStroke(1.dp, PureBlack)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ZamerPrimaryButton(
+                        text = "Сохранить",
+                        icon = Icons.Filled.Save,
+                        onClick = {
+                            onSaveEstimateInsideApp(aggregate)
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Смета сохранена в приложении")
+                            }
+                        },
                         modifier = Modifier.widthIn(max = 600.dp),
-                        testTag = "print_pdf_estimate_button"
+                        testTag = "save_estimate_button"
                     )
                 }
             }
@@ -191,11 +209,35 @@ fun EstimateScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Top category selector strip (Шпаклёвка, Штукатурка, Обои, Уголки, Ниши, Зачистка, Покраска, Стяжка + Своя)
+                // 1. ИТОГО ПО СМЕТЕ — AT THE VERY TOP
+                item {
+                    ZamerCard(
+                        modifier = Modifier.widthIn(max = 600.dp),
+                        borderColor = DeepGreen,
+                        containerColor = DeepGreen
+                    ) {
+                        Text("ИТОГО ПО СМЕТЕ", style = MaterialTheme.typography.titleMedium, color = PureWhite)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = Formatters.formatMoney(liveGrandTotal),
+                            style = MaterialTheme.typography.displayLarge,
+                            color = PureWhite,
+                            modifier = Modifier.testTag("estimate_grand_total")
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "Стены: ${Formatters.formatArea(t.totalWallAreaSqm)} · Пол: ${Formatters.formatArea(floorArea)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = PureWhite
+                        )
+                    }
+                }
+
+                // 2. Single-active horizontal work type selector strip
                 item {
                     Column(modifier = Modifier.fillMaxWidth().widthIn(max = 600.dp)) {
                         Text(
-                            text = "Выберите виды работ:",
+                            text = "Вид работы:",
                             style = MaterialTheme.typography.titleMedium,
                             color = PureBlack
                         )
@@ -207,20 +249,31 @@ fun EstimateScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             categories.forEachIndexed { idx, cat ->
+                                val isActive = idx == selectedIndex
+                                val hasPrice = cat.pricePerUnit > 0.0
                                 OutlinedButton(
-                                    onClick = {
-                                        categories[idx] = cat.copy(isSelected = !cat.isSelected)
-                                        persist()
-                                    },
-                                    modifier = Modifier.heightIn(min = 50.dp),
+                                    onClick = { selectedIndex = idx },
+                                    modifier = Modifier
+                                        .heightIn(min = 50.dp)
+                                        .testTag("estimate_tab_${cat.id}"),
                                     shape = RoundedCornerShape(14.dp),
-                                    border = BorderStroke(2.dp, if (cat.isSelected) DeepGreen else PureBlack),
+                                    border = BorderStroke(
+                                        2.dp,
+                                        when {
+                                            isActive -> DeepGreen
+                                            hasPrice -> BrightDoorGreen
+                                            else -> PureBlack
+                                        }
+                                    ),
                                     colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = if (cat.isSelected) DeepGreen else PureWhite,
-                                        contentColor = if (cat.isSelected) PureWhite else PureBlack
+                                        containerColor = if (isActive) DeepGreen else PureWhite,
+                                        contentColor = if (isActive) PureWhite else PureBlack
                                     )
                                 ) {
-                                    Text(cat.title, style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        text = if (hasPrice) "${cat.title} •" else cat.title,
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
                                 }
                             }
                             OutlinedButton(
@@ -241,103 +294,173 @@ fun EstimateScreen(
                     }
                 }
 
-                // Grand Total card
-                item {
-                    ZamerCard(
-                        modifier = Modifier.widthIn(max = 600.dp),
-                        borderColor = DeepGreen,
-                        containerColor = DeepGreen
-                    ) {
-                        Text("ИТОГО ПО СМЕТЕ", style = MaterialTheme.typography.titleMedium, color = PureWhite)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = Formatters.formatMoney(liveGrandTotal),
-                            style = MaterialTheme.typography.displayLarge,
-                            color = PureWhite,
-                            modifier = Modifier.testTag("estimate_grand_total")
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = "Стены: ${Formatters.formatArea(t.totalWallAreaSqm)} · Пол: ${Formatters.formatArea(floorArea)} · Углы: ${Formatters.formatRunningMeters(t.totalCornersMeters)}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = PureWhite
-                        )
-                    }
-                }
-
-                // Price per m2 / running meter for selected categories
-                val selectedItems = categories.mapIndexedNotNull { idx, c -> if (c.isSelected) idx to c else null }
-                if (selectedItems.isNotEmpty()) {
+                // 3. Active category editor card
+                val activeCat = categories.getOrNull(selectedIndex)
+                if (activeCat != null) {
                     item {
-                        ZamerCard(modifier = Modifier.widthIn(max = 600.dp), borderColor = PureBlack) {
-                            Text("Цена за 1 м² / п.м.", style = MaterialTheme.typography.titleLarge, color = PureBlack)
+                        val qty = qtyFor(activeCat)
+                        val sum = qty * activeCat.pricePerUnit
+                        var priceText by remember(activeCat.id, p.id) {
+                            mutableStateOf(
+                                if (activeCat.pricePerUnit > 0) Formatters.formatCleanNumber(activeCat.pricePerUnit) else ""
+                            )
+                        }
+                        var partialText by remember(activeCat.id, p.id) {
+                            mutableStateOf(
+                                if (activeCat.partialQuantity > 0) Formatters.formatCleanNumber(activeCat.partialQuantity) else ""
+                            )
+                        }
+
+                        ZamerCard(
+                            modifier = Modifier.widthIn(max = 600.dp),
+                            borderColor = PureBlack
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = activeCat.title,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = PureBlack
+                                )
+                                Text(
+                                    text = Formatters.formatMoney(sum),
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = DeepGreen
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "Идёт в расчёт: ${Formatters.formatCleanNumber(qty)} ${activeCat.unit}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = DeepGreen
+                            )
+
+                            Spacer(Modifier.height(10.dp))
+
+                            ZamerInputField(
+                                value = priceText,
+                                onValueChange = { txt ->
+                                    priceText = txt
+                                    val newPrice = Formatters.parseDecimalInput(txt) ?: 0.0
+                                    categories[selectedIndex] = activeCat.copy(
+                                        pricePerUnit = newPrice,
+                                        isSelected = newPrice > 0.0
+                                    )
+                                    persist()
+                                },
+                                label = "Сумма за 1 ${activeCat.unit} (₽)",
+                                placeholder = "0",
+                                keyboardType = KeyboardType.Decimal,
+                                isGiantNumeric = true,
+                                testTag = "estimate_price_input"
+                            )
+
+                            Spacer(Modifier.height(8.dp))
+
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        useOuterFloor = !useOuterFloor
+                                        val nextPartial = !activeCat.usePartial
+                                        categories[selectedIndex] = activeCat.copy(usePartial = nextPartial)
                                         persist()
                                     }
+                                    .testTag("estimate_partial_checkbox")
                             ) {
                                 Checkbox(
-                                    checked = useOuterFloor,
-                                    onCheckedChange = {
-                                        useOuterFloor = it
+                                    checked = activeCat.usePartial,
+                                    onCheckedChange = { checked ->
+                                        categories[selectedIndex] = activeCat.copy(usePartial = checked)
                                         persist()
                                     },
                                     colors = CheckboxDefaults.colors(checkedColor = DeepGreen)
                                 )
-                                Text("Пол считать со стенами", style = MaterialTheme.typography.bodyMedium, color = PureBlack)
+                                Text(
+                                    text = "Посчитать частично",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = PureBlack
+                                )
                             }
-                            Spacer(Modifier.height(8.dp))
 
-                            selectedItems.forEach { (idx, cat) ->
-                                val qty = qtyFor(cat)
-                                val sum = qty * cat.pricePerUnit
-                                var priceText by remember(cat.id, p.id) {
-                                    mutableStateOf(
-                                        if (cat.pricePerUnit > 0) Formatters.formatCleanNumber(cat.pricePerUnit) else ""
-                                    )
-                                }
-                                Column(
+                            if (activeCat.usePartial) {
+                                Spacer(Modifier.height(6.dp))
+                                ZamerInputField(
+                                    value = partialText,
+                                    onValueChange = { txt ->
+                                        partialText = txt
+                                        val q = Formatters.parseDecimalInput(txt) ?: 0.0
+                                        categories[selectedIndex] = activeCat.copy(partialQuantity = q)
+                                        persist()
+                                    },
+                                    label = "Сколько считать (${activeCat.unit})",
+                                    placeholder = "0.0",
+                                    keyboardType = KeyboardType.Decimal,
+                                    testTag = "estimate_partial_qty_input"
+                                )
+                            }
+
+                            // ONLY shown for Ламинат / FLOOR category
+                            if (activeCat.sourceKind == "FLOOR") {
+                                Spacer(Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 6.dp)
-                                        .background(DeepGreenSoft, RoundedCornerShape(14.dp))
-                                        .padding(12.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(cat.title, style = MaterialTheme.typography.titleMedium, color = PureBlack)
-                                            Text(
-                                                text = "Объём: ${Formatters.formatCleanNumber(qty)} ${cat.unit}",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = DeepGreen
-                                            )
+                                        .clickable {
+                                            useOuterFloor = !useOuterFloor
+                                            persist()
                                         }
-                                        Text(
-                                            text = Formatters.formatMoney(sum),
-                                            style = MaterialTheme.typography.titleLarge,
-                                            color = PureBlack
-                                        )
-                                    }
-                                    Spacer(Modifier.height(8.dp))
-                                    ZamerInputField(
-                                        value = priceText,
-                                        onValueChange = { txt ->
-                                            priceText = txt
-                                            val newPrice = Formatters.parseDecimalInput(txt) ?: 0.0
-                                            categories[idx] = cat.copy(pricePerUnit = newPrice)
+                                        .testTag("estimate_outer_floor_checkbox")
+                                ) {
+                                    Checkbox(
+                                        checked = useOuterFloor,
+                                        onCheckedChange = {
+                                            useOuterFloor = it
                                             persist()
                                         },
-                                        label = "Цена за ${cat.unit} (₽)",
-                                        placeholder = "0",
-                                        keyboardType = KeyboardType.Decimal
+                                        colors = CheckboxDefaults.colors(checkedColor = DeepGreen)
+                                    )
+                                    Text(
+                                        text = "Пол считать со стенами",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = PureBlack
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Summary of all priced work items
+                val pricedCats = categories.filter { it.pricePerUnit > 0.0 }
+                if (pricedCats.isNotEmpty()) {
+                    item {
+                        ZamerCard(modifier = Modifier.widthIn(max = 600.dp), borderColor = DeepGreen) {
+                            Text("Включено в смету:", style = MaterialTheme.typography.titleMedium, color = DeepGreen)
+                            Spacer(Modifier.height(6.dp))
+                            pricedCats.forEach { cat ->
+                                val q = qtyFor(cat)
+                                val s = q * cat.pricePerUnit
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "${cat.title} (${Formatters.formatCleanNumber(q)} ${cat.unit})",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = PureBlack,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = Formatters.formatMoney(s),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = DeepGreen
                                     )
                                 }
                             }
@@ -349,7 +472,7 @@ fun EstimateScreen(
                 if (aggregate.minorWorks.isNotEmpty()) {
                     item {
                         Text(
-                            text = "Доп. работы (${Formatters.formatMoney(t.minorWorksTotalRub)})",
+                            text = "Мелкая работа (${Formatters.formatMoney(t.minorWorksTotalRub)})",
                             style = MaterialTheme.typography.titleLarge,
                             color = PureBlack,
                             modifier = Modifier
@@ -435,8 +558,8 @@ fun EstimateScreen(
                         placeholder = "Плитка"
                     )
                     Text("От чего считать площадь:", style = MaterialTheme.typography.bodyMedium, color = PureBlack)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("WALLS" to "Стены", "FLOOR" to "Пол", "CORNERS" to "Углы").forEach { (kind, lbl) ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("WALLS" to "Стены", "FLOOR" to "Пол").forEach { (kind, lbl) ->
                             OutlinedButton(
                                 onClick = { sourceKind = kind },
                                 modifier = Modifier.weight(1f),
@@ -445,7 +568,7 @@ fun EstimateScreen(
                                     containerColor = if (sourceKind == kind) DeepGreen else PureWhite,
                                     contentColor = if (sourceKind == kind) PureWhite else PureBlack
                                 ),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
                             ) {
                                 Text(lbl, style = MaterialTheme.typography.bodyMedium)
                             }
@@ -457,16 +580,16 @@ fun EstimateScreen(
                 OutlinedButton(
                     onClick = {
                         if (catTitle.isNotBlank()) {
-                            val unit = if (sourceKind == "CORNERS") "п.м." else "м²"
                             categories.add(
                                 EstimateCategoryConfig(
                                     id = UUID.randomUUID().toString(),
                                     title = catTitle.trim(),
-                                    unit = unit,
+                                    unit = "м²",
                                     sourceKind = sourceKind,
                                     isSelected = true
                                 )
                             )
+                            selectedIndex = categories.lastIndex
                             persist()
                         }
                         showAddCategoryDialog = false
@@ -537,7 +660,6 @@ private fun printSinglePagePdf(
             callback: WriteResultCallback
         ) {
             val pdf = PdfDocument()
-            // Single A4 page: 595 x 842 pt
             val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
             val page = pdf.startPage(pageInfo)
             val c: Canvas = page.canvas
@@ -576,21 +698,24 @@ private fun printSinglePagePdf(
 
             c.drawText("ЗАМЕРЫ И РАБОТЫ", 40f, y, headPaint)
             y += 18f
-            val selected = categories.filter { it.isSelected }
-            if (selected.isEmpty()) {
+            val priced = categories.filter { it.pricePerUnit > 0.0 }
+            if (priced.isEmpty()) {
                 c.drawText("Стены: ${Formatters.formatArea(t.totalWallAreaSqm)}  |  Пол: ${Formatters.formatArea(floorArea)}", 40f, y, bodyPaint)
                 y += 18f
             } else {
-                selected.forEach { cat ->
+                priced.forEach { cat ->
                     if (y < 760f) {
-                        val qty = when (cat.sourceKind) {
+                        val qty = if (cat.usePartial) {
+                            cat.partialQuantity.coerceAtLeast(0.0)
+                        } else when (cat.sourceKind) {
                             "WALLS" -> t.totalWallAreaSqm
                             "FLOOR" -> floorArea
                             "CORNERS" -> t.totalCornersMeters
                             else -> if (cat.customQuantity > 0) cat.customQuantity else t.totalWallAreaSqm
                         }
                         val sum = qty * cat.pricePerUnit
-                        c.drawText("${cat.title}: ${Formatters.formatCleanNumber(qty)} ${cat.unit} × ${Formatters.formatMoney(cat.pricePerUnit)}", 40f, y, bodyPaint)
+                        val partialTag = if (cat.usePartial) " (част.)" else ""
+                        c.drawText("${cat.title}$partialTag: ${Formatters.formatCleanNumber(qty)} ${cat.unit} × ${Formatters.formatMoney(cat.pricePerUnit)}", 40f, y, bodyPaint)
                         c.drawText(Formatters.formatMoney(sum), 450f, y, bodyPaint)
                         y += 18f
                     }
@@ -599,7 +724,7 @@ private fun printSinglePagePdf(
 
             if (aggregate.minorWorks.isNotEmpty() && y < 740f) {
                 y += 8f
-                c.drawText("ДОПОЛНИТЕЛЬНЫЕ РАБОТЫ", 40f, y, headPaint)
+                c.drawText("МЕЛКАЯ РАБОТА", 40f, y, headPaint)
                 y += 18f
                 aggregate.minorWorks.forEach { w ->
                     if (y < 760f) {

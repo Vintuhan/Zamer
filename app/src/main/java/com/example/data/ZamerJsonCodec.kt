@@ -50,50 +50,49 @@ object ZamerJsonCodec {
             obj.put("count", op.count)
             obj.put("widthMeters", op.widthMeters)
             obj.put("heightMeters", op.heightMeters)
+            obj.put("label", op.label)
+            if (op.directAreaSqm != null) {
+                obj.put("directAreaSqm", op.directAreaSqm)
+            }
             arr.put(obj)
         }
         return arr.toString()
     }
 
-    /**
-     * Note: If the user explicitly deleted all openings ("[]"), preserve empty list!
-     * Only return defaultOpenings() when json is literally blank (brand new room).
-     */
+    fun decodeProjectOpenings(json: String): List<OpeningItem> {
+        if (json.isBlank() || json == "[]") return emptyList()
+        return decodeOpeningsList(json)
+    }
+
     fun decodeOpenings(json: String): List<OpeningItem> {
-        if (json.isBlank()) return defaultOpenings()
+        if (json.isBlank()) return emptyList()
+        return decodeOpeningsList(json)
+    }
+
+    private fun decodeOpeningsList(json: String): List<OpeningItem> {
         return runCatching {
             val arr = JSONArray(json)
             List(arr.length()) { i ->
                 val obj = arr.getJSONObject(i)
                 val typeStr = obj.optString("type", OpeningType.DOOR.name)
                 val type = runCatching { OpeningType.valueOf(typeStr) }.getOrDefault(OpeningType.DOOR)
+                val directArea = if (obj.has("directAreaSqm") && !obj.isNull("directAreaSqm")) {
+                    obj.optDouble("directAreaSqm")
+                } else {
+                    null
+                }
                 OpeningItem(
                     id = obj.optString("id", "${type.name}_$i"),
                     type = type,
-                    count = obj.optInt("count", 0),
+                    count = obj.optInt("count", 1),
                     widthMeters = obj.optDouble("widthMeters", if (type == OpeningType.DOOR) 0.8 else 1.4),
-                    heightMeters = obj.optDouble("heightMeters", if (type == OpeningType.DOOR) 2.0 else 1.4)
+                    heightMeters = obj.optDouble("heightMeters", if (type == OpeningType.DOOR) 2.0 else 1.4),
+                    label = obj.optString("label", ""),
+                    directAreaSqm = directArea
                 )
             }
         }.getOrDefault(emptyList())
     }
-
-    fun defaultOpenings(): List<OpeningItem> = listOf(
-        OpeningItem(
-            id = "door_default",
-            type = OpeningType.DOOR,
-            count = 1,
-            widthMeters = 0.80,
-            heightMeters = 2.00
-        ),
-        OpeningItem(
-            id = "window_default",
-            type = OpeningType.WINDOW,
-            count = 1,
-            widthMeters = 1.40,
-            heightMeters = 1.40
-        )
-    )
 
     fun encodeEstimateCategories(categories: List<EstimateCategoryConfig>): String {
         val arr = JSONArray()
@@ -106,6 +105,8 @@ object ZamerJsonCodec {
             obj.put("isSelected", c.isSelected)
             obj.put("pricePerUnit", c.pricePerUnit)
             obj.put("customQuantity", c.customQuantity)
+            obj.put("usePartial", c.usePartial)
+            obj.put("partialQuantity", c.partialQuantity)
             arr.put(obj)
         }
         return arr.toString()
@@ -125,7 +126,9 @@ object ZamerJsonCodec {
                     sourceKind = obj.optString("sourceKind", "WALLS"),
                     isSelected = obj.optBoolean("isSelected", false),
                     pricePerUnit = obj.optDouble("pricePerUnit", 0.0),
-                    customQuantity = obj.optDouble("customQuantity", 0.0)
+                    customQuantity = obj.optDouble("customQuantity", 0.0),
+                    usePartial = obj.optBoolean("usePartial", false),
+                    partialQuantity = obj.optDouble("partialQuantity", 0.0)
                 )
             }
         }.getOrDefault(ApartmentTemplates.defaultEstimateCategories)

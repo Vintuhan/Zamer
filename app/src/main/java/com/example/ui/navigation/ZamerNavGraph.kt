@@ -3,6 +3,7 @@ package com.example.ui.navigation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -12,14 +13,18 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.domain.MeasurementCategory
 import com.example.ui.screens.CalculatorScreen
+import com.example.ui.screens.ConstructorEditorScreen
 import com.example.ui.screens.CreateProjectScreen
 import com.example.ui.screens.EstimateScreen
-import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LayoutSelectionScreen
+import com.example.ui.screens.MaterialsScreen
 import com.example.ui.screens.MeasurementCategoryScreen
 import com.example.ui.screens.MeasurementWizardScreen
 import com.example.ui.screens.MinorWorksScreen
+import com.example.ui.screens.MoneyHistoryScreen
+import com.example.ui.screens.MonthlyStatsScreen
+import com.example.ui.screens.NotesScreen
 import com.example.ui.screens.ProjectDashboardScreen
 import com.example.ui.viewmodel.ZamerViewModel
 
@@ -27,13 +32,18 @@ object ZamerRoutes {
     const val ROUTE_HOME = "home"
     const val ROUTE_CREATE_PROJECT = "create_project"
     const val ROUTE_LAYOUT_SELECT = "layout_select"
+    const val ROUTE_CALC_GLOBAL = "calculator_global"
+    const val ROUTE_STATS = "monthly_stats"
     const val ROUTE_DASHBOARD = "dashboard/{projectId}"
     const val ROUTE_CATEGORY = "category/{projectId}/{category}"
     const val ROUTE_WIZARD = "wizard/{projectId}?roomId={roomId}"
     const val ROUTE_MINOR_WORKS = "minor_works/{projectId}"
     const val ROUTE_ESTIMATE = "estimate/{projectId}"
     const val ROUTE_CALCULATOR = "calculator/{projectId}"
-    const val ROUTE_HISTORY = "history/{projectId}"
+    const val ROUTE_MATERIALS = "materials/{projectId}"
+    const val ROUTE_NOTES = "notes/{projectId}"
+    const val ROUTE_MONEY = "money/{projectId}"
+    const val ROUTE_EDIT_DRAWING = "edit_drawing/{projectId}"
 
     fun dashboard(projectId: Long) = "dashboard/$projectId"
     fun category(projectId: Long, category: MeasurementCategory) = "category/$projectId/${category.name}"
@@ -42,7 +52,10 @@ object ZamerRoutes {
     fun minorWorks(projectId: Long) = "minor_works/$projectId"
     fun estimate(projectId: Long) = "estimate/$projectId"
     fun calculator(projectId: Long) = "calculator/$projectId"
-    fun history(projectId: Long) = "history/$projectId"
+    fun materials(projectId: Long) = "materials/$projectId"
+    fun notes(projectId: Long) = "notes/$projectId"
+    fun money(projectId: Long) = "money/$projectId"
+    fun editDrawing(projectId: Long) = "edit_drawing/$projectId"
 }
 
 @Composable
@@ -51,9 +64,13 @@ fun ZamerNavGraph(
 ) {
     val navController = rememberNavController()
     val projects by viewModel.projectSummaries.collectAsStateWithLifecycle()
+    val monthlyStats by viewModel.monthlyStats.collectAsStateWithLifecycle()
     val activeProject by viewModel.activeProject.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val calcUi by viewModel.calcUi.collectAsStateWithLifecycle()
+    val globalCalcHistory by viewModel.globalCalcHistory.collectAsStateWithLifecycle()
+    val addressLookupState by viewModel.addressLookupState.collectAsStateWithLifecycle()
+    val sketchMatchState by viewModel.sketchMatchState.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
@@ -72,15 +89,50 @@ fun ZamerNavGraph(
                 },
                 onDeleteProjectClick = { projectId ->
                     viewModel.deleteProject(projectId)
+                },
+                onOpenCalculatorClick = {
+                    viewModel.loadGlobalCalc()
+                    navController.navigate(ZamerRoutes.ROUTE_CALC_GLOBAL)
+                },
+                onOpenStatsClick = {
+                    navController.navigate(ZamerRoutes.ROUTE_STATS)
                 }
+            )
+        }
+
+        composable(ZamerRoutes.ROUTE_CALC_GLOBAL) {
+            LaunchedEffect(Unit) { viewModel.loadGlobalCalc() }
+            CalculatorScreen(
+                aggregate = null,
+                globalHistory = globalCalcHistory,
+                calcUi = calcUi,
+                onBackClick = { navController.popBackStack() },
+                onDigit = viewModel::onCalcDigit,
+                onParen = viewModel::onCalcParen,
+                onBackspace = viewModel::onCalcBackspace,
+                onClear = viewModel::onCalcClear,
+                onPercent = viewModel::onCalcPercent,
+                onOperator = viewModel::onCalcOperator,
+                onEquals = viewModel::onCalcEquals,
+                onInsertMeasurement = viewModel::insertMeasurementIntoCalc,
+                onRestoreRecent = viewModel::restoreHistoryValueToCalc,
+                onClearHistory = viewModel::clearHistory,
+                onFlushToHistory = viewModel::flushPendingCalcToHistory
+            )
+        }
+
+        composable(ZamerRoutes.ROUTE_STATS) {
+            MonthlyStatsScreen(
+                stats = monthlyStats,
+                onBackClick = { navController.popBackStack() }
             )
         }
 
         composable(ZamerRoutes.ROUTE_CREATE_PROJECT) {
             CreateProjectScreen(
                 draft = draft,
-                onDraftChange = { name, address, date ->
-                    viewModel.updateDraft(name, address, date)
+                onDraftChange = { name, address, date, hasStretchCeiling ->
+                    viewModel.updateDraft(name, address, date, hasStretchCeiling)
                 },
                 onNextClick = {
                     navController.navigate(ZamerRoutes.ROUTE_LAYOUT_SELECT)
@@ -91,8 +143,18 @@ fun ZamerNavGraph(
 
         composable(ZamerRoutes.ROUTE_LAYOUT_SELECT) {
             LayoutSelectionScreen(
-                onSelectTemplate = { templateId ->
-                    viewModel.createFromTemplate(templateId) { newId ->
+                initialAddress = draft.address,
+                addressLookupState = addressLookupState,
+                sketchMatchState = sketchMatchState,
+                onSearchByAddress = { addr, rooms ->
+                    viewModel.updateDraft(address = addr)
+                    viewModel.searchLayoutByAddress(addr, rooms)
+                },
+                onClearAddressLookup = { viewModel.clearAddressLookup() },
+                onAnalyzeSketch = viewModel::analyzeDrawnSketch,
+                onClearSketchMatch = viewModel::clearSketchMatch,
+                onSelectTemplate = { templateId, variantLabel ->
+                    viewModel.createFromTemplate(templateId, variantLabel) { newId ->
                         navController.navigate(ZamerRoutes.dashboard(newId)) {
                             popUpTo(ZamerRoutes.ROUTE_HOME)
                         }
@@ -137,8 +199,17 @@ fun ZamerNavGraph(
                 onOpenCalculator = {
                     navController.navigate(ZamerRoutes.calculator(projectId))
                 },
-                onOpenHistory = {
-                    navController.navigate(ZamerRoutes.history(projectId))
+                onOpenMaterials = {
+                    navController.navigate(ZamerRoutes.materials(projectId))
+                },
+                onOpenNotes = {
+                    navController.navigate(ZamerRoutes.notes(projectId))
+                },
+                onOpenMoneyHistory = {
+                    navController.navigate(ZamerRoutes.money(projectId))
+                },
+                onEditDrawing = {
+                    navController.navigate(ZamerRoutes.editDrawing(projectId))
                 }
             )
         }
@@ -169,14 +240,17 @@ fun ZamerNavGraph(
                 onSaveFloorOverride = { room, area ->
                     viewModel.saveRoomFloorOverride(room, area)
                 },
-                onSaveCorners = { room, inner, outer, extra ->
-                    viewModel.saveRoomCorners(room, inner, outer, extra)
+                onAddRoom = { pid, name, walls, shapeKey ->
+                    viewModel.addRoom(pid, name, walls, shapeKey)
                 },
-                onSaveOpenings = { room, openings ->
-                    viewModel.saveRoomOpenings(room, openings)
+                onRenameRoom = { room, newName ->
+                    viewModel.renameRoom(room, newName)
                 },
-                onAddRoom = { pid, name, walls ->
-                    viewModel.addRoom(pid, name, walls)
+                onSaveProjectWallHeight = { pid, heightMeters ->
+                    viewModel.saveProjectWallHeight(pid, heightMeters)
+                },
+                onSaveProjectOpenings = { pid, openings ->
+                    viewModel.saveProjectOpenings(pid, openings)
                 }
             )
         }
@@ -203,11 +277,8 @@ fun ZamerNavGraph(
                 onSaveWallLength = { room, idx, len ->
                     viewModel.saveWallLength(room, idx, len)
                 },
-                onSaveCeilingAndHeight = { room, h, hasStretch, hBefore, hAfter, all ->
-                    viewModel.saveRoomCeilingAndHeight(room, h, hasStretch, hBefore, hAfter, all)
-                },
-                onSaveOpenings = { room, openings ->
-                    viewModel.saveRoomOpenings(room, openings)
+                onRenameRoom = { room, newName ->
+                    viewModel.renameRoom(room, newName)
                 }
             )
         }
@@ -218,10 +289,8 @@ fun ZamerNavGraph(
         ) { backStackEntry ->
             val projectId = backStackEntry.arguments?.getLong("projectId") ?: 0L
             LaunchedEffect(projectId) { viewModel.selectProject(projectId) }
-            val suggestions = activeProject?.let { viewModel.getAiWorkSuggestions(it) } ?: emptyList()
             MinorWorksScreen(
                 aggregate = activeProject,
-                aiSuggestions = suggestions,
                 onBackClick = { navController.popBackStack() },
                 onSaveWork = { work -> viewModel.saveMinorWork(work) },
                 onDeleteWork = { work -> viewModel.deleteMinorWork(work) }
@@ -260,6 +329,7 @@ fun ZamerNavGraph(
                 calcUi = calcUi,
                 onBackClick = { navController.popBackStack() },
                 onDigit = viewModel::onCalcDigit,
+                onParen = viewModel::onCalcParen,
                 onBackspace = viewModel::onCalcBackspace,
                 onClear = viewModel::onCalcClear,
                 onPercent = viewModel::onCalcPercent,
@@ -267,26 +337,69 @@ fun ZamerNavGraph(
                 onEquals = viewModel::onCalcEquals,
                 onInsertMeasurement = viewModel::insertMeasurementIntoCalc,
                 onRestoreRecent = viewModel::restoreHistoryValueToCalc,
+                onClearHistory = viewModel::clearHistory,
                 onFlushToHistory = viewModel::flushPendingCalcToHistory
             )
         }
 
         composable(
-            route = ZamerRoutes.ROUTE_HISTORY,
+            route = ZamerRoutes.ROUTE_MATERIALS,
             arguments = listOf(navArgument("projectId") { type = NavType.LongType })
         ) { backStackEntry ->
             val projectId = backStackEntry.arguments?.getLong("projectId") ?: 0L
             LaunchedEffect(projectId) { viewModel.selectProject(projectId) }
-            HistoryScreen(
+            MaterialsScreen(
                 aggregate = activeProject,
                 onBackClick = { navController.popBackStack() },
-                onReturnToCalculator = { entry ->
-                    viewModel.restoreHistoryValueToCalc(projectId, entry)
-                    navController.navigate(ZamerRoutes.calculator(projectId)) {
-                        launchSingleTop = true
+                onAddMaterial = viewModel::addMaterialExpense,
+                onDeleteMaterial = viewModel::deleteMaterialExpense
+            )
+        }
+
+        composable(
+            route = ZamerRoutes.ROUTE_NOTES,
+            arguments = listOf(navArgument("projectId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val projectId = backStackEntry.arguments?.getLong("projectId") ?: 0L
+            LaunchedEffect(projectId) { viewModel.selectProject(projectId) }
+            NotesScreen(
+                aggregate = activeProject,
+                onBackClick = { navController.popBackStack() },
+                onSaveNotes = viewModel::saveProjectNotes
+            )
+        }
+
+        composable(
+            route = ZamerRoutes.ROUTE_MONEY,
+            arguments = listOf(navArgument("projectId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val projectId = backStackEntry.arguments?.getLong("projectId") ?: 0L
+            LaunchedEffect(projectId) { viewModel.selectProject(projectId) }
+            MoneyHistoryScreen(
+                aggregate = activeProject,
+                onBackClick = { navController.popBackStack() },
+                onAddMoney = viewModel::addMoneyEntry,
+                onDeleteMoney = viewModel::deleteMoneyEntry
+            )
+        }
+
+        composable(
+            route = ZamerRoutes.ROUTE_EDIT_DRAWING,
+            arguments = listOf(navArgument("projectId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val projectId = backStackEntry.arguments?.getLong("projectId") ?: 0L
+            LaunchedEffect(projectId) { viewModel.selectProject(projectId) }
+            val initialRooms = remember(activeProject) {
+                viewModel.extractConstructorRooms(activeProject)
+            }
+            ConstructorEditorScreen(
+                initialRooms = initialRooms,
+                onBack = { navController.popBackStack() },
+                onComplete = { drawnRooms ->
+                    viewModel.updateProjectDrawing(projectId, drawnRooms) {
+                        navController.popBackStack()
                     }
-                },
-                onClearHistory = viewModel::clearHistory
+                }
             )
         }
     }

@@ -14,9 +14,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MinorWorkEntity::class,
         SavedEstimateEntity::class,
         HistoryEntryEntity::class,
-        CalculatorStateEntity::class
+        CalculatorStateEntity::class,
+        MaterialExpenseEntity::class,
+        MoneyEntryEntity::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +28,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun savedEstimateDao(): SavedEstimateDao
     abstract fun historyDao(): HistoryDao
     abstract fun calculatorStateDao(): CalculatorStateDao
+    abstract fun materialExpenseDao(): MaterialExpenseDao
+    abstract fun moneyEntryDao(): MoneyEntryDao
 
     companion object {
         @Volatile
@@ -55,6 +59,51 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE projects ADD COLUMN hasStretchCeiling INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE rooms ADD COLUMN shapeKey TEXT NOT NULL DEFAULT 'AUTO'")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE projects ADD COLUMN projectOpeningsJson TEXT NOT NULL DEFAULT '[]'")
+                db.execSQL("ALTER TABLE projects ADD COLUMN notesText TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS material_expenses (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        projectId INTEGER NOT NULL,
+                        itemName TEXT NOT NULL,
+                        priceRub REAL NOT NULL,
+                        purchaseDate TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(projectId) REFERENCES projects(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_material_expenses_projectId ON material_expenses(projectId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_material_expenses_createdAt ON material_expenses(createdAt)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS money_entries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        projectId INTEGER NOT NULL,
+                        amountRub REAL NOT NULL,
+                        paymentMethod TEXT NOT NULL,
+                        dateStr TEXT NOT NULL,
+                        reasonText TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(projectId) REFERENCES projects(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_money_entries_projectId ON money_entries(projectId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_money_entries_createdAt ON money_entries(createdAt)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -62,7 +111,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "zamershchik_db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

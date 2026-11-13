@@ -1,21 +1,35 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AddressLookupUiState
 import com.example.data.AppDatabase
+import com.example.data.FirebaseAddressLayoutAiRepository
 import com.example.data.HistoryEntryEntity
 import com.example.data.MinorWorkEntity
+import com.example.data.MonthlyBucketStats
 import com.example.data.ProjectAggregate
 import com.example.data.ProjectEntity
 import com.example.data.ProjectSummaryItem
 import com.example.data.RoomEntity
+import com.example.data.SketchLayoutAiRepository
+import com.example.data.SketchMatchUiState
+import com.example.data.ZamerJsonCodec
 import com.example.data.ZamerRepository
+import com.example.domain.ConstructorRoom
+import com.example.domain.ConstructorShapeKind
 import com.example.domain.EstimateCategoryConfig
 import com.example.domain.Formatters
+import com.example.domain.LayoutConstructorEngine
+import com.example.domain.NoPlanRoomSpec
 import com.example.domain.OpeningItem
+import com.example.domain.SimpleRoomShape
 import com.example.domain.SnappedSegment
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,12 +38,15 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.abs
 
 data class ProjectDraft(
     val name: String = "",
     val address: String = "",
-    val startDate: String = Formatters.todayDate()
+    val startDate: String = Formatters.todayDate(),
+    val hasStretchCeiling: Boolean = false
 )
 
 data class CalculatorUiState(
@@ -45,11 +62,186 @@ data class AiWorkSuggestion(
     val reason: String
 )
 
+object CalculatorExpressionEvaluator {
+    private sealed interface Token {
+        data class Num(val value: Double) : Token
+        data class Op(val ch: Char) : Token
+        data object LParen : Token
+        data object RParen : Token
+    }
+
+    fun evaluate(expr: String): Double {
+        val rawTokens = tokenize(expr)
+        if (rawTokens.isEmpty()) return 0.0
+
+        // Strip trailing binary operators cleanly for live mid-expression preview
+        val tokens = rawTokens.toMutableList()
+        while (tokens.isNotEmpty() && tokens.last() is Token.Op) {
+            tokens.removeAt(tokens.lastIndex)
+        }
+        if (tokens.isEmpty()) return 0.0
+
+        // Auto-balance any unclosed parentheses for clean live preview
+        var openCount = 0
+        tokens.forEach { tok ->
+            when (tok) {
+                Token.LParen -> openCount++
+                Token.RParen -> if (openCount > 0) openCount--
+                else -> Unit
+            }
+        }
+        repeat(openCount) {
+            if (tokens.lastOrNull() is Token.LParen) {
+                tokens.removeAt(tokens.lastIndex)
+            } else {
+                tokens.add(Token.RParen)
+            }
+        }
+        while (tokens.isNotEmpty() && tokens.last() is Token.Op) {
+            tokens.removeAt(tokens.lastIndex)
+        }
+        if (tokens.isEmpty()) return 0.0
+
+        var pos = 0
+
+        fun parseExpr(): Double {
+            var left = parseTerm()
+            while (pos < tokens.size) {
+                val t = tokens[pos]
+                if (t is Token.Op && (t.ch == '+' || t.ch == '-')) {
+                    pos++
+                    val right = parseTerm()
+                    left = if (t.ch == '+') left + right else left - right
+                } else {
+                    break
+                }
+            }
+            return left
+        }
+
+        fun parseTerm(): Double {
+            var left = parseFactor()
+            while (pos < tokens.size) {
+                val t = tokens[pos]
+                if (t is Token.Op && (t.ch == '*' || t.ch == '/')) {
+                    pos++
+                    val right = parseFactor()
+                    left = if (t.ch == '*') {
+                        left * right
+                    } else {
+                        if (abs(right) < 1e-12) 0.0 else left / right
+                    }
+                } else {
+                    break
+                }
+            }
+            return left
+        }
+
+        fun parseFactor(): Double {
+            if (pos >= tokens.size) return 0.0
+            return when (val t = tokens[pos]) {
+                is Token.Op -> {
+                    if (t.ch == '-') {
+                        pos++
+                        -parseFactor()
+                    } else if (t.ch == '+') {
+                        pos++
+                        parseFactor()
+                    } else {
+                        pos++
+                        0.0
+                    }
+                }
+                Token.LParen -> {
+                    pos++
+                    val v = parseExpr()
+                    if (pos < tokens.size && tokens[pos] == Token.RParen) pos++
+                    v
+                }
+                is Token.Num -> {
+                    pos++
+                    t.value
+                }
+                Token.RParen -> {
+                    pos++
+                    0.0
+                }
+            }
+        }
+
+        val result = parseExpr()
+        return if (result.isNaN() || result.isInfinite()) 0.0 else result
+    }
+
+    private fun tokenize(input: String): List<Token> {
+        val out = mutableListOf<Token>()
+        val s = input.replace(',', '.')
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            when {
+                c.isWhitespace() -> i++
+                c == '(' -> {
+                    out.add(Token.LParen)
+                    i++
+                }
+                c == ')' -> {
+                    out.add(Token.RParen)
+                    i++
+                }
+                c == '+' -> {
+                    out.add(Token.Op('+'))
+                    i++
+                }
+                c == '-' || c == '−' -> {
+                    out.add(Token.Op('-'))
+                    i++
+                }
+                c == '*' || c == '×' -> {
+                    out.add(Token.Op('*'))
+                    i++
+                }
+                c == '/' || c == '÷' -> {
+                    out.add(Token.Op('/'))
+                    i++
+                }
+                c.isDigit() || c == '.' -> {
+                    val start = i
+                    while (i < s.length && (s[i].isDigit() || s[i] == '.')) i++
+                    val num = s.substring(start, i).toDoubleOrNull()
+                    if (num != null) out.add(Token.Num(num))
+                }
+                else -> i++
+            }
+        }
+        return out
+    }
+}
+
 class ZamerViewModel(application: Application) : AndroidViewModel(application) {
 
+    companion object {
+        const val GLOBAL_CALC_PROJECT_ID = -1L
+        private const val GLOBAL_CALC_PREFS = "global_calculator_prefs"
+        private const val KEY_EXPR = "expr"
+        private const val KEY_INPUT = "input"
+        private const val KEY_PREVIEW = "preview"
+        private const val KEY_UNIT = "unit"
+        private const val KEY_HISTORY = "history"
+    }
+
     private val repository = ZamerRepository(AppDatabase.getInstance(application))
+    private val addressAiRepository = FirebaseAddressLayoutAiRepository()
+    private val sketchAiRepository = SketchLayoutAiRepository()
+    private val globalPrefs = application.getSharedPreferences(GLOBAL_CALC_PREFS, Context.MODE_PRIVATE)
+    private var addressLookupJob: Job? = null
+    private var sketchMatchJob: Job? = null
 
     val projectSummaries: StateFlow<List<ProjectSummaryItem>> = repository.observeProjectSummaries()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val monthlyStats: StateFlow<List<MonthlyBucketStats>> = repository.observeMonthlyStats()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _selectedProjectId = MutableStateFlow<Long?>(null)
@@ -58,7 +250,7 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeProject: StateFlow<ProjectAggregate?> = _selectedProjectId
         .flatMapLatest { id ->
-            if (id == null) flowOf(null) else repository.observeProjectAggregate(id)
+            if (id == null || id <= 0L) flowOf(null) else repository.observeProjectAggregate(id)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -68,22 +260,114 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
     private val _calcUi = MutableStateFlow(CalculatorUiState())
     val calcUi: StateFlow<CalculatorUiState> = _calcUi.asStateFlow()
 
+    private val _globalCalcHistory = MutableStateFlow<List<HistoryEntryEntity>>(loadGlobalCalcHistory())
+    val globalCalcHistory: StateFlow<List<HistoryEntryEntity>> = _globalCalcHistory.asStateFlow()
+
+    private val _addressLookupState = MutableStateFlow<AddressLookupUiState>(AddressLookupUiState.Idle)
+    val addressLookupState: StateFlow<AddressLookupUiState> = _addressLookupState.asStateFlow()
+
+    private val _sketchMatchState = MutableStateFlow<SketchMatchUiState>(SketchMatchUiState.Idle)
+    val sketchMatchState: StateFlow<SketchMatchUiState> = _sketchMatchState.asStateFlow()
+
     private var loadedCalcProjectId: Long? = null
 
-    fun updateDraft(name: String? = null, address: String? = null, startDate: String? = null) {
+    fun updateDraft(
+        name: String? = null,
+        address: String? = null,
+        startDate: String? = null,
+        hasStretchCeiling: Boolean? = null
+    ) {
         val cur = _draft.value
         _draft.value = cur.copy(
             name = name ?: cur.name,
             address = address ?: cur.address,
-            startDate = startDate ?: cur.startDate
+            startDate = startDate ?: cur.startDate,
+            hasStretchCeiling = hasStretchCeiling ?: cur.hasStretchCeiling
         )
     }
 
     fun resetDraft() {
-        _draft.value = ProjectDraft(startDate = Formatters.todayDate())
+        _draft.value = ProjectDraft(startDate = Formatters.todayDate(), hasStretchCeiling = false)
+        _addressLookupState.value = AddressLookupUiState.Idle
+        _sketchMatchState.value = SketchMatchUiState.Idle
+    }
+
+    fun searchLayoutByAddress(address: String, roomCountHint: Int? = null) {
+        val query = address.trim()
+        if (query.length < 4) {
+            _addressLookupState.value = AddressLookupUiState.Error(
+                "Введите точный адрес дома (город, улица и номер дома)"
+            )
+            return
+        }
+        addressLookupJob?.cancel()
+        addressLookupJob = viewModelScope.launch {
+            _addressLookupState.value = AddressLookupUiState.Loading(
+                "Ищем дом в OpenStreetMap, МинЖКХ и PhotoBuildings..."
+            )
+            val evidence = addressAiRepository.collectHouseEvidence(query)
+            val foundSources = buildList {
+                if (evidence.osm.foundOnMap) add("OSM")
+                if (evidence.minZhkh.found) add("МинЖКХ")
+                if (evidence.photoBuildings.found) add("PhotoBuildings")
+            }
+            _addressLookupState.value = AddressLookupUiState.Loading(
+                if (foundSources.isNotEmpty()) {
+                    "Найдено (${foundSources.joinToString(", ")})! ИИ определяет серию и планировки..."
+                } else {
+                    "ИИ анализирует адрес, возможную серию и планировки..."
+                }
+            )
+            val result = addressAiRepository.analyzeAddressAndMatchLayouts(
+                address = query,
+                roomCountHint = roomCountHint,
+                evidence = evidence
+            )
+            _addressLookupState.value = result.fold(
+                onSuccess = { AddressLookupUiState.Success(it) },
+                onFailure = { err ->
+                    AddressLookupUiState.Error(
+                        err.localizedMessage ?: "Ошибка ИИ-поиска по адресу"
+                    )
+                }
+            )
+        }
+    }
+
+    fun clearAddressLookup() {
+        addressLookupJob?.cancel()
+        _addressLookupState.value = AddressLookupUiState.Idle
+    }
+
+    fun analyzeDrawnSketch(bitmap: Bitmap, roomSummaryHint: String) {
+        sketchMatchJob?.cancel()
+        sketchMatchJob = viewModelScope.launch {
+            _sketchMatchState.value = SketchMatchUiState.Loading
+            val result = sketchAiRepository.suggestLayoutsForSketch(
+                sketchBitmap = bitmap,
+                roomSummaryHint = roomSummaryHint
+            )
+            _sketchMatchState.value = result.fold(
+                onSuccess = { SketchMatchUiState.Success(it) },
+                onFailure = { err ->
+                    SketchMatchUiState.Error(
+                        err.localizedMessage ?: "Не удалось подобрать планировки по рисунку"
+                    )
+                }
+            )
+        }
+    }
+
+    fun clearSketchMatch() {
+        sketchMatchJob?.cancel()
+        _sketchMatchState.value = SketchMatchUiState.Idle
     }
 
     fun selectProject(projectId: Long) {
+        if (projectId <= 0L) {
+            loadGlobalCalc()
+            return
+        }
         _selectedProjectId.value = projectId
         viewModelScope.launch {
             val existing = AppDatabase.getInstance(getApplication()).calculatorStateDao().getState(projectId)
@@ -101,15 +385,38 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun createFromTemplate(templateId: String, onCreated: (Long) -> Unit) {
+    fun loadGlobalCalc() {
+        loadedCalcProjectId = GLOBAL_CALC_PROJECT_ID
+        val expr = globalPrefs.getString(KEY_EXPR, "") ?: ""
+        val input = globalPrefs.getString(KEY_INPUT, "0") ?: "0"
+        val preview = java.lang.Double.longBitsToDouble(
+            globalPrefs.getLong(KEY_PREVIEW, java.lang.Double.doubleToRawLongBits(0.0))
+        )
+        val unit = globalPrefs.getString(KEY_UNIT, "") ?: ""
+        _calcUi.value = CalculatorUiState(
+            expression = expr,
+            currentInput = input,
+            livePreview = if (preview.isNaN() || preview.isInfinite()) 0.0 else preview,
+            activeUnit = unit
+        )
+        _globalCalcHistory.value = loadGlobalCalcHistory()
+    }
+
+    fun createFromTemplate(
+        templateId: String,
+        variantLabel: String? = null,
+        onCreated: (Long) -> Unit
+    ) {
         val d = _draft.value
         val finalName = d.name.trim().ifEmpty { "Объект от ${d.startDate}" }
         viewModelScope.launch {
             val id = repository.createProjectFromTemplate(
                 name = finalName,
-                address = d.address.trim().ifEmpty { "Адрес не указан" },
+                address = d.address.trim(),
                 startDate = d.startDate,
-                templateId = templateId
+                templateId = templateId,
+                variantLabel = variantLabel,
+                hasStretchCeiling = false
             )
             resetDraft()
             selectProject(id)
@@ -123,9 +430,10 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val id = repository.createProjectFromDrawing(
                 name = finalName,
-                address = d.address.trim().ifEmpty { "Адрес не указан" },
+                address = d.address.trim(),
                 startDate = d.startDate,
-                drawnRooms = drawnRooms
+                drawnRooms = drawnRooms,
+                hasStretchCeiling = false
             )
             resetDraft()
             selectProject(id)
@@ -133,15 +441,70 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun createWithoutPlan(rooms: List<Pair<String, Int>>, onCreated: (Long) -> Unit) {
+    fun updateProjectDrawing(
+        projectId: Long,
+        drawnRooms: List<Pair<String, List<SnappedSegment>>>,
+        onUpdated: () -> Unit
+    ) {
+        viewModelScope.launch {
+            repository.updateProjectDrawing(projectId, drawnRooms)
+            onUpdated()
+        }
+    }
+
+    fun extractConstructorRooms(aggregate: ProjectAggregate?): List<ConstructorRoom> {
+        if (aggregate == null) return emptyList()
+        val orderedRooms = aggregate.rooms.sortedBy { it.entity.sortOrder }
+        val drawnSegments = ZamerJsonCodec.decodeDrawingSegments(aggregate.project.customDrawingJson)
+        if (drawnSegments.isNotEmpty()) {
+            var cursor = 0
+            val pairs = mutableListOf<Pair<String, List<SnappedSegment>>>()
+            orderedRooms.forEach { r ->
+                val count = r.walls.size.coerceAtLeast(r.entity.wallCount)
+                if (cursor + count <= drawnSegments.size) {
+                    pairs += r.entity.name to drawnSegments.subList(cursor, cursor + count)
+                    cursor += count
+                }
+            }
+            val restored = LayoutConstructorEngine.roomsFromSegments(pairs)
+            if (restored.isNotEmpty()) return restored
+        }
+        return orderedRooms.mapIndexed { idx, r ->
+            val shape = if (r.entity.shapeKey == "WALL_LINE" || r.walls.size == 1) {
+                ConstructorShapeKind.WALL_LINE
+            } else {
+                when (SimpleRoomShape.fromKey(r.entity.shapeKey, r.entity.wallCount)) {
+                    SimpleRoomShape.L_SHAPE -> ConstructorShapeKind.L_SHAPE
+                    SimpleRoomShape.U_SHAPE -> ConstructorShapeKind.U_SHAPE
+                    SimpleRoomShape.RECT -> if (r.entity.name.contains("коридор", ignoreCase = true)) {
+                        ConstructorShapeKind.CORRIDOR
+                    } else {
+                        ConstructorShapeKind.RECTANGLE
+                    }
+                }
+            }
+            val col = idx % 2
+            val row = idx / 2
+            LayoutConstructorEngine.createRoom(
+                id = "init_${r.entity.id}",
+                kind = shape,
+                centerX = 288f + col * 384f,
+                centerY = 288f + row * 384f,
+                existingCount = idx
+            ).copy(name = r.entity.name)
+        }
+    }
+
+    fun createWithoutPlan(rooms: List<NoPlanRoomSpec>, onCreated: (Long) -> Unit) {
         val d = _draft.value
         val finalName = d.name.trim().ifEmpty { "Объект от ${d.startDate}" }
         viewModelScope.launch {
             val id = repository.createProjectWithoutPlan(
                 name = finalName,
-                address = d.address.trim().ifEmpty { "Адрес не указан" },
+                address = d.address.trim(),
                 startDate = d.startDate,
-                roomSpecs = rooms
+                roomSpecs = rooms,
+                hasStretchCeiling = false
             )
             resetDraft()
             selectProject(id)
@@ -158,9 +521,20 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addRoom(projectId: Long, name: String, wallCount: Int = 4) {
+    fun setProjectStretchCeiling(project: ProjectEntity, hasStretchCeiling: Boolean) {
         viewModelScope.launch {
-            repository.addRoomToProject(projectId, name, wallCount)
+            repository.setProjectStretchCeiling(project, hasStretchCeiling)
+        }
+    }
+
+    fun addRoom(
+        projectId: Long,
+        name: String,
+        wallCount: Int = 4,
+        shapeKey: String = SimpleRoomShape.fromKey(null, wallCount).shapeKey
+    ) {
+        viewModelScope.launch {
+            repository.addRoomToProject(projectId, name, wallCount, shapeKey)
         }
     }
 
@@ -170,9 +544,63 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun renameRoom(room: RoomEntity, newName: String) {
+        viewModelScope.launch {
+            repository.renameRoom(room, newName)
+        }
+    }
+
     fun saveWallLength(room: RoomEntity, wallIndex: Int, lengthMeters: Double, logToHistory: Boolean = true) {
         viewModelScope.launch {
             repository.updateWallLength(room, wallIndex, lengthMeters, recordHistory = logToHistory)
+        }
+    }
+
+    fun saveProjectWallHeight(projectId: Long, heightMeters: Double) {
+        viewModelScope.launch {
+            repository.updateProjectWallHeight(projectId, heightMeters)
+        }
+    }
+
+    fun saveProjectOpenings(projectId: Long, openings: List<OpeningItem>) {
+        viewModelScope.launch {
+            repository.updateProjectOpenings(projectId, openings)
+        }
+    }
+
+    fun saveProjectNotes(projectId: Long, notes: String) {
+        viewModelScope.launch {
+            repository.updateProjectNotes(projectId, notes)
+        }
+    }
+
+    fun addMaterialExpense(projectId: Long, itemName: String, priceRub: Double, purchaseDate: String) {
+        viewModelScope.launch {
+            repository.addMaterialExpense(projectId, itemName, priceRub, purchaseDate)
+        }
+    }
+
+    fun deleteMaterialExpense(id: Long) {
+        viewModelScope.launch {
+            repository.deleteMaterialExpense(id)
+        }
+    }
+
+    fun addMoneyEntry(
+        projectId: Long,
+        amountRub: Double,
+        paymentMethod: String,
+        dateStr: String,
+        reasonText: String
+    ) {
+        viewModelScope.launch {
+            repository.addMoneyEntry(projectId, amountRub, paymentMethod, dateStr, reasonText)
+        }
+    }
+
+    fun deleteMoneyEntry(id: Long) {
+        viewModelScope.launch {
+            repository.deleteMoneyEntry(id)
         }
     }
 
@@ -261,70 +689,7 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Built-in AI helper for suggesting minor works based on apartment measurements and layout.
-     */
-    fun getAiWorkSuggestions(aggregate: ProjectAggregate): List<AiWorkSuggestion> {
-        val list = mutableListOf<AiWorkSuggestion>()
-        val totalWindows = aggregate.rooms.sumOf { r ->
-            r.openings.filter { it.type == com.example.domain.OpeningType.WINDOW }.sumOf { it.count }
-        }
-        val wallArea = aggregate.totals.totalWallAreaSqm
-        val layout = aggregate.project.layoutTitle.lowercase()
-
-        if (totalWindows > 0) {
-            list.add(
-                AiWorkSuggestion(
-                    title = "Откосы (${totalWindows} окн.)",
-                    suggestedPrice = totalWindows * 1800.0,
-                    reason = "По замерам найдено окон: $totalWindows"
-                )
-            )
-        } else {
-            list.add(
-                AiWorkSuggestion(
-                    title = "Откосы",
-                    suggestedPrice = 2000.0,
-                    reason = "Стандартная доп. работа по проёмам"
-                )
-            )
-        }
-
-        if ("хрущ" in layout || "сталин" in layout || "брежн" in layout || "панел" in layout || "1-447" in layout) {
-            list.add(
-                AiWorkSuggestion(
-                    title = "Зачистка стен и старой краски",
-                    suggestedPrice = if (wallArea > 0) (wallArea * 120.0) else 3500.0,
-                    reason = "Для вторичного жилья (${aggregate.project.layoutTitle})"
-                )
-            )
-        }
-
-        list.add(
-            AiWorkSuggestion(
-                title = "Подмазать штробы после электрики",
-                suggestedPrice = 1500.0,
-                reason = "Частая работа перед шпаклёвкой"
-            )
-        )
-        list.add(
-            AiWorkSuggestion(
-                title = "Убраться и вынести мусор",
-                suggestedPrice = 2000.0,
-                reason = "Финальная уборка объекта"
-            )
-        )
-        list.add(
-            AiWorkSuggestion(
-                title = "Перевоз материала и инструмента",
-                suggestedPrice = 1500.0,
-                reason = "Доставка / подъём"
-            )
-        )
-        return list
-    }
-
-    // --- CALCULATOR WITH AUTOMATIC HISTORY & PERSISTENCE ---
+    // --- CALCULATOR WITH PARENTHESES, GLOBAL MODE & PERSISTENT HISTORY ---
 
     private fun ensureCalcLoaded(projectId: Long) {
         if (loadedCalcProjectId != projectId) {
@@ -335,6 +700,13 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
     fun onCalcDigit(projectId: Long, digit: String) {
         ensureCalcLoaded(projectId)
         val cur = _calcUi.value
+        val trimmedExpr = cur.expression.trimEnd()
+        val updatedExpr = if (cur.currentInput.isEmpty() && trimmedExpr.endsWith(")")) {
+            "$trimmedExpr ×"
+        } else {
+            cur.expression
+        }
+
         val nextInput = when {
             digit == "." -> {
                 if (cur.currentInput.contains(".")) cur.currentInput
@@ -348,22 +720,59 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
             cur.currentInput == "0" -> digit
             else -> cur.currentInput + digit
         }
-        val fullExpr = buildDisplayExpression(cur.expression, nextInput)
+        val fullExpr = buildDisplayExpression(updatedExpr, nextInput)
         val preview = evaluateExpressionSafe(fullExpr)
-        updateAndPersistCalc(projectId, cur.expression, nextInput, preview, cur.activeUnit)
+        updateAndPersistCalc(projectId, updatedExpr, nextInput, preview, cur.activeUnit)
+    }
+
+    fun onCalcParen(projectId: Long, paren: String) {
+        ensureCalcLoaded(projectId)
+        val cur = _calcUi.value
+        val trimmedExpr = cur.expression.trimEnd()
+        if (paren == "(") {
+            val nextExpr = when {
+                trimmedExpr.isBlank() && (cur.currentInput.isBlank() || cur.currentInput == "0") -> "("
+                cur.currentInput.isNotBlank() && cur.currentInput != "0" -> {
+                    val base = if (trimmedExpr.isBlank()) cur.currentInput else "$trimmedExpr ${cur.currentInput}"
+                    "$base × ("
+                }
+                trimmedExpr.endsWith(")") -> "$trimmedExpr × ("
+                trimmedExpr.isBlank() -> "("
+                else -> "$trimmedExpr ("
+            }
+            val preview = evaluateExpressionSafe(nextExpr)
+            updateAndPersistCalc(projectId, nextExpr, "", preview, cur.activeUnit)
+        } else {
+            val openCount = trimmedExpr.count { it == '(' }
+            val closeCount = trimmedExpr.count { it == ')' }
+            if (openCount <= closeCount) return
+
+            val nextExpr = when {
+                cur.currentInput.isNotBlank() -> {
+                    if (trimmedExpr.isBlank()) "${cur.currentInput} )" else "$trimmedExpr ${cur.currentInput} )"
+                }
+                trimmedExpr.endsWith(")") || trimmedExpr.lastOrNull()?.isDigit() == true -> "$trimmedExpr )"
+                trimmedExpr.endsWith("(") -> "$trimmedExpr 0 )"
+                else -> return
+            }
+            val preview = evaluateExpressionSafe(nextExpr)
+            updateAndPersistCalc(projectId, nextExpr, "", preview, cur.activeUnit)
+        }
     }
 
     fun onCalcBackspace(projectId: Long) {
         ensureCalcLoaded(projectId)
         val cur = _calcUi.value
         if (cur.currentInput.isNotEmpty() && cur.currentInput != "0") {
-            val trimmed = cur.currentInput.dropLast(1).ifEmpty { "0" }
-            val fullExpr = buildDisplayExpression(cur.expression, trimmed)
-            updateAndPersistCalc(projectId, cur.expression, trimmed, evaluateExpressionSafe(fullExpr), cur.activeUnit)
+            val trimmed = cur.currentInput.dropLast(1)
+            val nextInput = if (trimmed.isEmpty() && cur.expression.isBlank()) "0" else trimmed
+            val fullExpr = buildDisplayExpression(cur.expression, nextInput)
+            updateAndPersistCalc(projectId, cur.expression, nextInput, evaluateExpressionSafe(fullExpr), cur.activeUnit)
         } else if (cur.expression.isNotEmpty()) {
             val trimmedExpr = cur.expression.trimEnd().dropLast(1).trimEnd()
-            val preview = evaluateExpressionSafe(trimmedExpr)
-            updateAndPersistCalc(projectId, trimmedExpr, "0", preview, cur.activeUnit)
+            val nextInput = if (trimmedExpr.isEmpty()) "0" else ""
+            val preview = evaluateExpressionSafe(buildDisplayExpression(trimmedExpr, nextInput))
+            updateAndPersistCalc(projectId, trimmedExpr, nextInput, preview, cur.activeUnit)
         }
     }
 
@@ -385,7 +794,6 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         val res = if (cur.expression.isBlank()) {
             valNum / 100.0
         } else {
-            // Add percentage (common for +10% reserve if typed "10%")
             val inputNum = cur.currentInput.toDoubleOrNull() ?: 0.0
             val basePreview = evaluateExpressionSafe(cur.expression)
             val delta = basePreview * (inputNum / 100.0)
@@ -411,34 +819,25 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
             "-" -> "−"
             else -> op
         }
-        val currentValStr = cur.currentInput.ifEmpty { "0" }
-        val newExpression = if (cur.expression.isBlank()) {
-            "$currentValStr $cleanOp"
-        } else if (cur.currentInput.isEmpty()) {
-            cur.expression.trimEnd().dropLast(1).trimEnd() + " $cleanOp"
-        } else {
-            "${cur.expression} $currentValStr $cleanOp"
+        val trimmedExpr = cur.expression.trimEnd()
+        val newExpression = when {
+            cur.currentInput.isNotEmpty() -> {
+                if (trimmedExpr.isBlank()) "${cur.currentInput} $cleanOp"
+                else "$trimmedExpr ${cur.currentInput} $cleanOp"
+            }
+            trimmedExpr.endsWith(")") -> "$trimmedExpr $cleanOp"
+            trimmedExpr.endsWith("(") -> {
+                if (cleanOp == "−") "$trimmedExpr -" else trimmedExpr
+            }
+            trimmedExpr.isBlank() -> "0 $cleanOp"
+            trimmedExpr.lastOrNull() in listOf('+', '−', '-', '×', '*', '÷', '/') -> {
+                trimmedExpr.dropLast(1).trimEnd().let { prefix ->
+                    if (prefix.isBlank()) cleanOp else "$prefix $cleanOp"
+                }
+            }
+            else -> "$trimmedExpr $cleanOp"
         }
-        val interimPreview = evaluateExpressionSafe(
-            if (cur.expression.isBlank()) currentValStr else "${cur.expression} $currentValStr"
-        )
-        if (cur.expression.isNotBlank() && cur.currentInput.isNotEmpty()) {
-            logCalcHistory(
-                projectId,
-                "Калькулятор",
-                "${cur.expression} $currentValStr = ${Formatters.formatCleanNumber(interimPreview)}",
-                interimPreview,
-                cur.activeUnit
-            )
-        } else {
-            logCalcHistory(
-                projectId,
-                "Калькулятор",
-                newExpression,
-                interimPreview,
-                cur.activeUnit
-            )
-        }
+        val interimPreview = evaluateExpressionSafe(newExpression)
         updateAndPersistCalc(projectId, newExpression, "", interimPreview, cur.activeUnit)
     }
 
@@ -503,6 +902,11 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearHistory(projectId: Long) {
+        if (projectId <= 0L) {
+            globalPrefs.edit().remove(KEY_HISTORY).apply()
+            _globalCalcHistory.value = emptyList()
+            return
+        }
         viewModelScope.launch {
             repository.clearHistory(projectId)
         }
@@ -521,8 +925,17 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
             livePreview = preview,
             activeUnit = activeUnit
         )
-        viewModelScope.launch {
-            repository.saveCalculatorState(projectId, expression, currentInput, preview, activeUnit)
+        if (projectId <= 0L) {
+            globalPrefs.edit()
+                .putString(KEY_EXPR, expression)
+                .putString(KEY_INPUT, currentInput)
+                .putLong(KEY_PREVIEW, java.lang.Double.doubleToRawLongBits(preview))
+                .putString(KEY_UNIT, activeUnit)
+                .apply()
+        } else {
+            viewModelScope.launch {
+                repository.saveCalculatorState(projectId, expression, currentInput, preview, activeUnit)
+            }
         }
     }
 
@@ -533,6 +946,22 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         result: Double,
         unit: String = ""
     ) {
+        if (projectId <= 0L) {
+            val entry = HistoryEntryEntity(
+                id = System.currentTimeMillis(),
+                projectId = GLOBAL_CALC_PROJECT_ID,
+                timestamp = System.currentTimeMillis(),
+                source = "CALC",
+                title = title,
+                expression = expression,
+                resultValue = result,
+                unit = unit
+            )
+            val updated = (listOf(entry) + _globalCalcHistory.value).take(80)
+            _globalCalcHistory.value = updated
+            saveGlobalCalcHistory(updated)
+            return
+        }
         viewModelScope.launch {
             repository.logHistory(
                 projectId = projectId,
@@ -543,6 +972,41 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
                 unit = unit
             )
         }
+    }
+
+    private fun saveGlobalCalcHistory(items: List<HistoryEntryEntity>) {
+        val arr = JSONArray()
+        items.forEach { e ->
+            val obj = JSONObject()
+            obj.put("id", e.id)
+            obj.put("timestamp", e.timestamp)
+            obj.put("title", e.title)
+            obj.put("expression", e.expression)
+            if (e.resultValue != null) obj.put("resultValue", e.resultValue)
+            obj.put("unit", e.unit)
+            arr.put(obj)
+        }
+        globalPrefs.edit().putString(KEY_HISTORY, arr.toString()).apply()
+    }
+
+    private fun loadGlobalCalcHistory(): List<HistoryEntryEntity> {
+        val raw = globalPrefs.getString(KEY_HISTORY, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                HistoryEntryEntity(
+                    id = obj.optLong("id", i.toLong() + 1L),
+                    projectId = GLOBAL_CALC_PROJECT_ID,
+                    timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                    source = "CALC",
+                    title = obj.optString("title", "Калькулятор"),
+                    expression = obj.optString("expression", ""),
+                    resultValue = if (obj.has("resultValue")) obj.optDouble("resultValue") else null,
+                    unit = obj.optString("unit", "")
+                )
+            }
+        }.getOrDefault(emptyList())
     }
 
     private fun currentNumericValue(cur: CalculatorUiState): Double {
@@ -558,48 +1022,8 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun evaluateExpressionSafe(expr: String): Double {
-        val tokens = expr.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        if (tokens.isEmpty()) return 0.0
-        val cleanTokens = tokens.toMutableList()
-        while (cleanTokens.isNotEmpty() && cleanTokens.last() in listOf("+", "−", "-", "×", "*", "÷", "/")) {
-            cleanTokens.removeAt(cleanTokens.lastIndex)
-        }
-        if (cleanTokens.isEmpty()) return 0.0
-
-        val pass1 = mutableListOf<String>()
-        var i = 0
-        while (i < cleanTokens.size) {
-            val tok = cleanTokens[i]
-            if ((tok == "×" || tok == "*" || tok == "÷" || tok == "/") && pass1.isNotEmpty() && i + 1 < cleanTokens.size) {
-                val left = pass1.removeAt(pass1.lastIndex).toDoubleOrNull() ?: 0.0
-                val right = cleanTokens[i + 1].toDoubleOrNull() ?: 0.0
-                val res = if (tok == "×" || tok == "*") {
-                    left * right
-                } else {
-                    if (abs(right) < 1e-9) 0.0 else left / right
-                }
-                pass1.add(res.toString())
-                i += 2
-            } else {
-                pass1.add(tok)
-                i++
-            }
-        }
-
-        var acc = pass1.firstOrNull()?.toDoubleOrNull() ?: 0.0
-        var j = 1
-        while (j + 1 < pass1.size) {
-            val op = pass1[j]
-            val rhs = pass1[j + 1].toDoubleOrNull() ?: 0.0
-            when (op) {
-                "+" -> acc += rhs
-                "−", "-" -> acc -= rhs
-            }
-            j += 2
-        }
-        return if (acc.isNaN() || acc.isInfinite()) 0.0 else acc
-    }
+    private fun evaluateExpressionSafe(expr: String): Double =
+        CalculatorExpressionEvaluator.evaluate(expr)
 
     fun buildEstimateText(aggregate: ProjectAggregate): String {
         val sb = StringBuilder()
@@ -610,13 +1034,14 @@ class ZamerViewModel(application: Application) : AndroidViewModel(application) {
         sb.appendLine("Дата: ${p.startDate} · ${p.layoutTitle}")
         sb.appendLine()
         val floorTotal = if (p.useOuterFloorInEstimate) t.totalOuterFloorAreaSqm else t.totalInnerFloorAreaSqm
-        val selectedCats = aggregate.estimateCategories.filter { it.isSelected }
-        if (selectedCats.isNotEmpty()) {
+        val pricedCats = aggregate.estimateCategories.filter { it.pricePerUnit > 0.0 }
+        if (pricedCats.isNotEmpty()) {
             sb.appendLine("РАБОТЫ ПО ЗАМЕРАМ:")
-            selectedCats.forEach { cat ->
+            pricedCats.forEach { cat ->
                 val qty = repository.quantityForCategory(cat, t.totalWallAreaSqm, floorTotal, t.totalCornersMeters)
                 val sum = qty * cat.pricePerUnit
-                sb.appendLine("• ${cat.title}: ${Formatters.formatCleanNumber(qty)} ${cat.unit} × ${Formatters.formatMoney(cat.pricePerUnit)} = ${Formatters.formatMoney(sum)}")
+                val partialTag = if (cat.usePartial) " (частично)" else ""
+                sb.appendLine("• ${cat.title}$partialTag: ${Formatters.formatCleanNumber(qty)} ${cat.unit} × ${Formatters.formatMoney(cat.pricePerUnit)} = ${Formatters.formatMoney(sum)}")
             }
             sb.appendLine()
         }
